@@ -1,0 +1,137 @@
+---
+# Service VPS as an overlay member.
+# Prerequisite: declared in network.yml -> services, and hub.yml has been
+# run (it creates this peer's keys). service_name is set in inventory.
+
+- name: Resolve own service entry from the model
+  ansible.builtin.set_fact:
+    svc: "{{ services | selectattr('name', 'equalto', service_name) | first }}"
+    hub_host: "{{ groups['hub'][0] }}"
+
+- name: Install packages
+  ansible.builtin.apt:
+    name: [wireguard, openresolv]
+    state: present
+
+- name: Fetch peer keys from the hub
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  register: _keys
+  delegate_to: "{{ hub_host }}"
+  loop:
+    - /etc/wireguard/server.pub
+    - "/etc/wireguard/clients/{{ svc.name }}.priv"
+    - "/etc/wireguard/clients/{{ svc.name }}.psk"
+  no_log: true
+
+- name: Parse keys
+  ansible.builtin.set_fact:
+    member_keys: >-
+      {{ dict(_keys.results | map(attribute='source') | map('basename')
+         | zip(_keys.results | map(attribute='content') | map('b64decode') | map('trim'))) }}
+  no_log: true
+
+- name: Deploy wg0.conf
+  ansible.builtin.template:
+    src: wg0-member.conf.j2
+    dest: /etc/wireguard/{{ wg_interface }}.conf
+    mode: "0600"
+    validate: "wg-quick strip %s"
+  notify: Restart member WireGuard
+
+- name: Deploy nftables ruleset
+  ansible.builtin.template:
+    src: nftables-member.conf.j2
+    dest: /etc/nftables.conf
+    mode: "0644"
+    validate: "nft -c -f %s"
+  notify: Reload nftables
+
+- name: Enable WireGuard and nftables
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: yes
+    state: started
+  loop:
+    - "wg-quick@{{ wg_interface }}"
+    - nftables
+
+# ----------------------- Certificate from the hub -----------------------
+
+- name: Create cert-sync key directory
+  ansible.builtin.file:
+    path: /etc/wg-certs-sync
+    state: directory
+    mode: "0700"
+
+- name: Generate cert-sync SSH key
+  community.crypto.openssh_keypair:
+    path: /etc/wg-certs-sync/id_ed25519
+    type: ed25519
+    mode: "0600"
+  register: _synckey
+
+- name: Authorize this host on the hub (rrsync read-only, cert dir only)
+  ansible.builtin.lineinfile:
+    path: "/home/{{ cert_sync_user }}/.ssh/authorized_keys"
+    create: yes
+    mode: "0600"
+    owner: "{{ cert_sync_user }}"
+    group: "{{ cert_sync_user }}"
+    line: >-
+      restrict,command="{{ hostvars[hub_host]._rrsync_path | default('/usr/bin/rrsync') }} -ro {{ cert_publish_dir }}"
+      {{ _synckey.public_key }} {{ svc.name }}-certsync
+  delegate_to: "{{ hub_host }}"
+  become: true
+
+- name: Create local cert directory
+  ansible.builtin.file:
+    path: /etc/wg-certs
+    state: directory
+    mode: "0750"
+
+- name: Deploy cert-sync script
+  ansible.builtin.template:
+    src: cert-sync.sh.j2
+    dest: /usr/local/sbin/cert-sync.sh
+    mode: "0755"
+
+- name: Deploy cert-sync service and timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    mode: "0644"
+    content: "{{ item.content }}"
+  loop:
+    - name: cert-sync.service
+      content: |
+        [Unit]
+        Description=Pull wildcard certificate from hub
+        After=wg-quick@{{ wg_interface }}.service
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/sbin/cert-sync.sh
+    - name: cert-sync.timer
+      content: |
+        [Unit]
+        Description=Daily certificate pull
+
+        [Timer]
+        OnCalendar=*-*-* 05:11:00
+        RandomizedDelaySec=30m
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target
+
+- name: Enable cert-sync timer and run once
+  ansible.builtin.systemd:
+    name: cert-sync.timer
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+- name: Initial cert pull
+  ansible.builtin.systemd:
+    name: cert-sync.service
+    state: started

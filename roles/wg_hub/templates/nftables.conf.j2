@@ -1,0 +1,162 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible. Trust zones of the VPN overlay.
+# Groups: admin - everything; user - internet + explicitly allowed
+# services, no LANs; sites - site-to-site + allowed services;
+# services - declared ingress/egress only; iot - pinpoint service access.
+
+{% set pub_if = ansible_default_ipv4.interface %}
+{% set admin_ips = clients | selectattr('group', 'defined') | selectattr('group', 'equalto', 'admin') | map(attribute='ip') | list %}
+{% set user_ips = clients | selectattr('group', 'defined') | selectattr('group', 'equalto', 'user') | map(attribute='ip') | list %}
+{% set service_ips = services | map(attribute='ip') | list %}
+{% set all_site_nets = [] %}
+{% set all_iot_nets = [] %}
+{% for sid, s in sites.items() %}
+{%   set _ = all_site_nets.append(s.ip ~ '/32') %}
+{%   for n in s.subnets %}{% set _ = all_site_nets.append(n) %}{% endfor %}
+{%   for n in s.iot_subnets | default([]) %}{% set _ = all_iot_nets.append(n) %}{% endfor %}
+{% endfor %}
+
+flush ruleset
+
+table inet filter {
+    set admin_ips {
+        type ipv4_addr
+        elements = { {{ admin_ips | join(', ') }} }
+    }
+{% if user_ips %}
+    set user_ips {
+        type ipv4_addr
+        elements = { {{ user_ips | join(', ') }} }
+    }
+{% endif %}
+{% if service_ips %}
+    set service_ips {
+        type ipv4_addr
+        elements = { {{ service_ips | join(', ') }} }
+    }
+{% endif %}
+    set site_nets {
+        type ipv4_addr
+        flags interval
+        elements = { {{ all_site_nets | join(', ') }} }
+    }
+{% for sid, s in sites.items() %}
+    set {{ sid }}_nets {
+        type ipv4_addr
+        flags interval
+        elements = { {{ ([s.ip ~ '/32'] + s.subnets) | join(', ') }} }
+    }
+{% endfor %}
+{% if all_iot_nets %}
+    set iot_nets {
+        type ipv4_addr
+        flags interval
+        elements = { {{ all_iot_nets | join(', ') }} }
+    }
+{% endif %}
+    set rfc1918 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
+    }
+
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        iif "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+
+        ip protocol icmp limit rate 20/second accept
+
+        # WireGuard handshakes from the internet
+        udp dport {{ wg_port }} accept
+
+        # SSH: always via the overlay{{ ', temporarily also on the public interface' if hub_public_ssh else '' }}
+        iifname "{{ wg_interface }}" tcp dport {{ ssh_port }} accept
+{% if hub_public_ssh %}
+        tcp dport {{ ssh_port }} accept comment "hub_public_ssh=true: disable after bootstrap"
+{% endif %}
+
+        # Internal DNS - overlay only
+        iifname "{{ wg_interface }}" udp dport 53 accept
+        iifname "{{ wg_interface }}" tcp dport 53 accept
+
+        log prefix "nft_input_drop: " counter drop
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+
+        ct state established,related accept
+        ct state invalid drop
+
+        # --- admin: full access (overlay, sites, internet via hub/home) ---
+        iifname "{{ wg_interface }}" ip saddr @admin_ips accept
+
+{% if sites | length > 1 %}
+        # --- site-to-site ---
+{% set site_ids = sites.keys() | list %}
+{% for a in site_ids %}
+{% for b in site_ids if b != a %}
+        iifname "{{ wg_interface }}" oifname "{{ wg_interface }}" ip saddr @{{ a }}_nets ip daddr @{{ b }}_nets accept
+{% endfor %}
+{% endfor %}
+{% endif %}
+
+{% for svc in services %}
+        # --- service: {{ svc.name }} ({{ svc.ip }}) ---
+{% for r in svc.ingress | default([]) %}
+{% set srcs = [] %}
+{% for g in r.from %}
+{%   if g == 'sites' %}{% set _ = srcs.append('@site_nets') %}
+{%   elif g == 'iot' %}{% set _ = srcs.append('@iot_nets') %}
+{%   elif g == 'users' %}{% if user_ips %}{% set _ = srcs.append('@user_ips') %}{% endif %}
+{%   elif g == 'services' %}{% set _ = srcs.append('@service_ips') %}
+{%   elif g == 'admin' %}{# already accepted above #}
+{%   elif g in sites %}{% set _ = srcs.append('@' ~ g ~ '_nets') %}
+{%   else %}{% set match = services | selectattr('name', 'equalto', g) | list %}{% if match %}{% set _ = srcs.append(match[0].ip) %}{% endif %}
+{%   endif %}
+{% endfor %}
+{% for src in srcs %}
+        iifname "{{ wg_interface }}" ip saddr {{ src }} ip daddr {{ svc.ip }} {{ r.proto }} dport {{ r.port }} accept
+{% endfor %}
+{% endfor %}
+{% for r in svc.egress | default([]) %}
+{% if r.to == 'iot_subnets' %}{% set dst = '@iot_nets' %}
+{% elif r.to == 'sites' %}{% set dst = '@site_nets' %}
+{% elif r.to in sites %}{% set dst = '@' ~ r.to ~ '_nets' %}
+{% else %}{% set dst = r.to %}
+{% endif %}
+{% if r.port is defined %}
+        iifname "{{ wg_interface }}" ip saddr {{ svc.ip }} ip daddr {{ dst }} {{ r.proto | default('tcp') }} dport {{ r.port }} accept
+{% else %}
+        iifname "{{ wg_interface }}" ip saddr {{ svc.ip }} ip daddr {{ dst }} accept
+{% endif %}
+{% endfor %}
+{% endfor %}
+
+{% if user_ips %}
+        # --- user: internet only. Private destinations fall through to the
+        # final drop, so users never reach LANs, routers, or undeclared
+        # services (only services that list "users" in ingress are opened above).
+        iifname "{{ wg_interface }}" ip saddr @user_ips ip daddr != @rfc1918 accept
+{% endif %}
+
+        log prefix "nft_forward_drop: " counter drop
+    }
+}
+
+{% set cloud_ips = clients | selectattr('group', 'defined') | selectattr('profile', 'defined') | selectattr('profile', 'equalto', 'cloud') | map(attribute='ip') | list %}
+table inet nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+{% if cloud_ips %}
+        # cloud-profile clients egress with the VPS public IP
+        oifname "{{ pub_if }}" ip saddr {{ wg_network }} masquerade
+{% else %}
+        # No cloud-profile clients: the VPS is NOT an internet exit.
+        # (Add a client with profile: cloud to re-enable this masquerade.)
+{% endif %}
+    }
+}

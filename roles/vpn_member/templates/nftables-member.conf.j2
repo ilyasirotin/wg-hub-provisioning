@@ -1,0 +1,36 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible. Service {{ svc.name }}: public interface closed,
+# inbound only from the overlay and only on declared ports.
+# Source-based ACLs are enforced on the hub; this is a second line
+# of defense (defense in depth).
+
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        iif "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+        ip protocol icmp limit rate 20/second accept
+
+{% if member_public_ssh | default(true) %}
+        # Bootstrap access; once inventory points at the wg address,
+        # set member_public_ssh: false and re-run the role.
+        tcp dport {{ ssh_port }} accept comment "bootstrap ssh"
+        tcp dport 22 accept comment "bootstrap ssh (default port)"
+{% endif %}
+        iifname "{{ wg_interface }}" tcp dport {{ ssh_port }} accept
+
+{% for r in svc.ingress | default([]) %}
+        iifname "{{ wg_interface }}" {{ r.proto }} dport {{ r.port }} accept
+{% endfor %}
+
+        log prefix "nft_input_drop: " counter drop
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+    }
+}

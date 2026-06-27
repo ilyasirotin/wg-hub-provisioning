@@ -1,0 +1,11 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": false
+  },
+  "permissions": {
+    "allow": [
+      "Bash(touch /tmp/claude-1000/-home-ilia-Projects-wg-infra/3adf213e-30d8-41fc-9505-f2b5b1df835f/scratchpad/test)"
+    ]
+  }
+}

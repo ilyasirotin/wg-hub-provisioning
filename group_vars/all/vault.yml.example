@@ -1,0 +1,8 @@
+# Copy to vault.yml and encrypt:
+#   cp group_vars/all/vault.yml.example group_vars/all/vault.yml
+#   # paste the real token
+#   ansible-vault encrypt group_vars/all/vault.yml
+#
+# Token: Cloudflare dashboard -> My Profile -> API Tokens -> Create Token
+# -> "Edit zone DNS" template, scoped to the threadnull.dev zone only.
+cloudflare_dns_api_token: "CHANGE_ME"

@@ -1,0 +1,118 @@
+# =====================================================================
+# DECLARATIVE NETWORK MODEL
+# This is the only file you edit to add a device, a site, or a service.
+# Everything else (wg0.conf, nftables ACLs, routes, DNS zone, client
+# configs, MikroTik snippets) is generated from it.
+#
+# ADDRESS PLAN
+#   Overlay (WireGuard):       10.99.0.0/24
+#     10.99.0.1                hub
+#     10.99.0.11 - 10.99.0.19  site routers  (site N -> 10.99.0.1N)
+#     10.99.0.20 - 10.99.0.99  personal clients
+#     10.99.0.100 - .199       service VPSes
+#   Site LANs:                 10.<site>.0.0/16
+#     VLAN k of site N         10.N.<k>.0/24
+#     e.g. 10.2.30.57 = site 2 (house B), VLAN 30 (IoT) - readable at
+#     a glance. 99 is reserved for the overlay and never a site number.
+# =====================================================================
+
+wg_domain: in.threadnull.dev
+wg_network: 10.99.0.0/24
+wg_port: 51820
+wg_interface: wg0
+
+hub:
+  ip: 10.99.0.1
+  public_host: 65.21.177.182   # Endpoint in all generated client configs
+
+# ---------------------------------------------------------------------
+# Sites: MikroTik routers with LANs behind them.
+#   exit_node: true  -> internet traffic of profile:home clients leaves
+#                       through this router (PBR table 123). Exactly one.
+#   subnets          -> LAN subnets routed across the overlay.
+#   iot_subnets      -> subset of subnets; sources for group "iot" ACLs.
+# Adding a third house: copy a block, number = 3, router IP 10.99.0.13,
+# subnets 10.3.<vlan>.0/24. Run hub.yml, apply the generated .rsc snippet
+# from /etc/wireguard/clients/<site>.rsc on the new router.
+# ---------------------------------------------------------------------
+sites:
+  site_a:
+    description: "House A - primary (exit node)"
+    number: 1
+    ip: 10.99.0.11
+    exit_node: true
+    subnets:
+      - 10.1.10.0/24    # vlan10 ethernet
+      - 10.1.20.0/24    # vlan20 wlan
+      - 10.1.30.0/24    # vlan30 iot
+      - 10.1.40.0/24    # vlan40 guest
+    iot_subnets:
+      - 10.1.30.0/24
+    dns_names: [router-a]
+
+  site_b:
+    description: "House B - remote"
+    number: 2
+    ip: 10.99.0.12
+    exit_node: false
+    subnets:
+      - 10.2.10.0/24    # vlan10 ethernet
+      - 10.2.20.0/24    # vlan20 wlan
+      - 10.2.30.0/24    # vlan30 iot
+      - 10.2.40.0/24    # vlan40 iptv
+      - 10.2.100.0/24   # vlan100 switch
+    iot_subnets:
+      - 10.2.30.0/24
+    dns_names: [router-b]
+
+# ---------------------------------------------------------------------
+# Personal devices. A .conf (QR-able) is generated for each.
+#   group: admin -> full access: overlay, all site LANs, all services.
+#   group: user  -> internet via chosen profile + only services that
+#                   list "users" in their ingress "from". No LAN access,
+#                   no router management. For family members.
+#   profile: cloud -> internet egress via the VPS (Hetzner IP)
+#   profile: home  -> internet egress via the exit-node router (home IP)
+# ---------------------------------------------------------------------
+clients:
+  - name: main_home
+    ip: 10.99.0.20
+    group: admin
+    profile: home          # internet egress via the exit-node home router
+
+  # Example family member:
+  # - name: wife_phone
+  #   ip: 10.99.0.30
+  #   group: user
+  #   profile: home
+
+# ---------------------------------------------------------------------
+# Service VPSes. Example:
+#
+# services:
+#   - name: ha                          # peer name and key file name
+#     ip: 10.99.0.100
+#     dns_names: [ha]                   # -> ha.in.threadnull.dev
+#     nginx: true                       # local TLS termination
+#     nginx_upstream: 127.0.0.1:8123
+#     ingress:                          # who may connect, and where
+#       - { proto: tcp, port: 443,  from: [users, sites, iot] }
+#       - { proto: tcp, port: 8883, from: [iot] }       # MQTT over TLS
+#     egress:                           # flows the service may open itself
+#       - { to: iot_subnets }           # no port = all ports/protocols:
+#                                       #   vacuum control, printer camera,
+#                                       #   ESPHome API, etc.
+#
+#   - name: metrics
+#     ip: 10.99.0.101
+#     dns_names: [metrics, grpc]
+#     ingress:
+#       - { proto: tcp, port: 443, from: [sites] }      # gRPC agent
+#
+# "from" accepts: users, sites, iot, services, a site id (site_a),
+# or another service name. group:admin always has access implicitly.
+#
+# Workflow: edit here -> ansible-playbook playbooks/hub.yml
+#                     -> ansible-playbook playbooks/services.yml
+# ---------------------------------------------------------------------
+services: []

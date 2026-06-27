@@ -1,0 +1,8 @@
+[tools]
+python = "3.12"
+
+[settings]
+python.uv_venv_auto = true
+
+[env]
+_.python.venv = { path = ".venv", create = true, uv_create_args = ['--seed'] }

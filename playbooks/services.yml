@@ -1,0 +1,9 @@
+---
+# Service VPS provisioning. Prerequisite: the service is declared in
+# network.yml and hub.yml has been run (it creates the peer keys).
+- name: Provision service VPS as VPN member
+  hosts: services
+  become: true
+  roles:
+    - base_hardening
+    - vpn_member

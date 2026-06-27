@@ -1,0 +1,73 @@
+---
+# Base hardening for Debian 12/13.
+# Firewall is NOT configured here - it is fully described by the wg_hub /
+# vpn_member roles in a single /etc/nftables.conf (ufw is deliberately
+# avoided to prevent two competing rule systems).
+
+- name: Update apt cache and upgrade packages
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+    cache_valid_time: 3600
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - nftables
+      - fail2ban
+      - unattended-upgrades
+      - qrencode
+      - rsync
+      - curl
+      - python3-pexpect
+    state: present
+
+- name: Remove ufw if present (conflicts with raw nftables)
+  ansible.builtin.apt:
+    name: ufw
+    state: absent
+    purge: true
+
+- name: Ensure nftables service is enabled
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+
+- name: Configure SSH daemon
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/90-hardening.conf
+    mode: "0644"
+    content: |
+      Port {{ ssh_port }}
+      PermitRootLogin prohibit-password
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      X11Forwarding no
+      MaxAuthTries 4
+      ClientAliveInterval 120
+      ClientAliveCountMax 3
+  notify: Restart sshd
+
+- name: Configure fail2ban for sshd (nftables backend)
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/sshd.local
+    mode: "0644"
+    content: |
+      [DEFAULT]
+      banaction = nftables-multiport
+      banaction_allports = nftables-allports
+
+      [sshd]
+      enabled = true
+      port = {{ ssh_port }}
+      maxretry = 5
+      bantime = 1h
+  notify: Restart fail2ban
+
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";

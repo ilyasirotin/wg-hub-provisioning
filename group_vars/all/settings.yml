@@ -1,0 +1,35 @@
+# Operational settings (rarely change)
+
+ssh_port: 5860
+
+# SSH on the hub's public interface.
+# true  = needed for bootstrap (fresh server).
+# false = SSH only via wg0; emergency access via Hetzner console.
+# Flip to false and re-run hub.yml once `ssh -p 5860 wg@10.99.0.1` works.
+hub_public_ssh: false
+
+# Where dnsmasq forwards everything that is not {{ wg_domain }}.
+# 10.99.0.11 = router A (keeps NextDNS filtering for VPN clients),
+# 1.1.1.1 as fallback when house A is unreachable.
+dns_upstreams:
+  - 10.99.0.11
+  - 1.1.1.1
+
+# The hub's OWN system resolver (independent of dnsmasq / the overlay).
+# Public servers so the hub can always resolve Let's Encrypt, apt, etc.,
+# even during bootstrap before any site peer is connected.
+hub_resolvers:
+  - 1.1.1.1
+  - 8.8.8.8
+
+# ACME / Let's Encrypt
+acme_email: me@threadnull.dev
+lego_version: "5.2.2"
+cert_domains:
+  - "*.in.threadnull.dev"
+# Cloudflare API token lives in group_vars/all/vault.yml (ansible-vault):
+#   cloudflare_dns_api_token: "..."
+
+# Directory on the hub that members pull the certificate from (rsync, RO)
+cert_publish_dir: /var/lib/wg-certs
+cert_sync_user: certsync

@@ -1,0 +1,30 @@
+---
+# Apply peer changes without tearing tunnels down.
+# NOTE: changing ListenPort/Address needs a full wg-quick@wg0 restart -
+# syncconf does not pick those up (see README).
+- name: Sync WireGuard peers
+  ansible.builtin.shell: |
+    set -o pipefail
+    if wg show {{ wg_interface }} > /dev/null 2>&1; then
+      wg syncconf {{ wg_interface }} <(wg-quick strip /etc/wireguard/{{ wg_interface }}.conf)
+    else
+      systemctl restart wg-quick@{{ wg_interface }}
+    fi
+  args:
+    executable: /bin/bash
+
+- name: Apply WireGuard routes
+  ansible.builtin.systemd:
+    name: wg0-routes
+    state: restarted
+    daemon_reload: yes
+
+- name: Reload nftables
+  ansible.builtin.systemd:
+    name: nftables
+    state: reloaded
+
+- name: Restart dnsmasq
+  ansible.builtin.systemd:
+    name: dnsmasq
+    state: restarted
