@@ -1,75 +1,66 @@
-# 2026-06-16 01:10:36 by RouterOS 7.23.1
-# software id = XRES-NGT7
+# 2026-06-27 17:02:43 by RouterOS 7.23.1
+# software id = 6155-VEVA
 #
 # model = C53UiG+5HPaxD2HPaxD
-# serial number = HJ10B4N6JZK
+# serial number = HEA08VQ1C1X
 /interface bridge
 add comment="Main bridge" name=bridge vlan-filtering=yes
 /interface wifi
 set [ find default-name=wifi2 ] channel.band=2ghz-ax .frequency=2402-2462 \
-    .width=20/40mhz configuration.country=Kazakhstan .mode=ap .ssid=MT-A \
+    .width=20/40mhz configuration.country=Kazakhstan .mode=ap .ssid=MT \
     disabled=no name=wifi_2.4 security.authentication-types=wpa2-psk,wpa3-psk \
-    .encryption=ccmp .ft=no .ft-over-ds=no .ft-preserve-vlanid=no \
-    .group-encryption=ccmp .group-key-update=40m .management-encryption=cmac \
-    .management-protection=allowed .wps=disable
-add configuration.mode=ap .ssid=MT-A-Guest disabled=no mac-address=\
-    D2:EA:11:10:2D:F3 master-interface=wifi_2.4 name=wifi_2.4_guest \
-    security.authentication-types=wpa2-psk,wpa3-psk .encryption=ccmp .ft=no \
-    .ft-over-ds=no .ft-preserve-vlanid=no .group-encryption=ccmp \
-    .group-key-update=40m .management-encryption=cmac .management-protection=\
-    allowed .wps=disable
-add configuration.hide-ssid=yes .mode=ap .ssid=MT-A-IoT disabled=no \
+    .encryption=ccmp .ft=yes .ft-mobility-domain=0x1234 .ft-over-ds=no \
+    .ft-preserve-vlanid=no .group-encryption=ccmp .group-key-update=40m \
+    .management-encryption=cmac .management-protection=allowed .wps=disable
+add configuration.hide-ssid=yes .mode=ap .ssid=MT-IoT disabled=no \
     mac-address=D2:EA:11:10:2D:F2 master-interface=wifi_2.4 name=wifi_2.4_iot \
-    security.authentication-types=wpa2-psk,wpa3-psk .ft=no .ft-over-ds=no \
-    .ft-preserve-vlanid=no .wps=disable
+    security.authentication-types=wpa2-psk,wpa3-psk .ft=yes \
+    .ft-mobility-domain=0x1235 .ft-over-ds=no .ft-preserve-vlanid=no .wps=\
+    disable
 set [ find default-name=wifi1 ] channel.band=5ghz-ax .frequency=\
     5170-5210,5210-5250,5250-5290,5290-5330,5650-5690,5690-5710 \
     .skip-dfs-channels=10min-cac .width=20/40/80mhz configuration.country=\
-    Kazakhstan .mode=ap .ssid=MT-A disabled=no name=wifi_5 \
+    Kazakhstan .mode=ap .ssid=MT disabled=no name=wifi_5 \
     security.authentication-types=wpa2-psk,wpa3-psk .disable-pmkid=yes \
-    .encryption=ccmp .ft=no .ft-over-ds=no .ft-preserve-vlanid=no \
-    .group-encryption=ccmp .group-key-update=5m .management-encryption=cmac \
-    .management-protection=required .wps=disable
-add configuration.mode=ap .ssid=MT-A-Guest disabled=no mac-address=\
-    D2:EA:11:10:2D:F1 master-interface=wifi_5 name=wifi_5_guest \
-    security.authentication-types=wpa2-psk,wpa3-psk .disable-pmkid=yes \
-    .encryption=ccmp .ft=no .ft-over-ds=no .ft-preserve-vlanid=no \
-    .group-encryption=ccmp .group-key-update=5m .management-encryption=cmac \
-    .management-protection=required .wps=disable
+    .encryption=ccmp .ft=yes .ft-mobility-domain=0x1234 .ft-over-ds=no \
+    .ft-preserve-vlanid=no .group-encryption=ccmp .group-key-update=5m \
+    .management-encryption=cmac .management-protection=required .wps=disable
+add configuration.hide-ssid=yes .mode=ap .ssid=MT-Backhaul disabled=no \
+    mac-address=4A:A9:8A:97:DF:C7 master-interface=wifi_5 name=\
+    wifi_5_backhaul security.authentication-types=wpa2-psk,wpa3-psk \
+    .encryption=ccmp .ft=no .wps=disable
 /interface pppoe-client
 add add-default-route=yes disabled=no interface=ether1 name=pppoe-homeline \
-    user=as52-38@unlim
+    user=ah3-2-12@unlim
 /interface wireguard
 add listen-port=23034 mtu=1420 name=wg-client
 /interface vlan
 add comment="Ethernet Clients" interface=bridge name=vlan10_eth vlan-id=10
 add comment="WLAN Clients" interface=bridge name=vlan20_wlan vlan-id=20
 add comment="IoT Devices" interface=bridge name=vlan30_iot vlan-id=30
-add comment="Guest Devices" interface=bridge name=vlan40_guest vlan-id=40
-/disk
-add file-path=/usb1-part1/swap file-size=914.9MiB media-interface=bridge \
-    slot=file-usb1-part1-swap swap=yes type=file
-add media-interface=bridge parent=usb1 partition-number=1 partition-offset=\
-    512 partition-size=128035675648 type=partition
+add comment="IPTV Network" interface=bridge name=vlan40_iptv vlan-id=40
+add comment="Switch device" interface=bridge name=vlan100_eth vlan-id=100
 /interface list
 add name=WAN
 add name=TRUSTED_LAN
 add name=UNTRUSTED_LAN
 add name=VPN
-add name=GUEST_LAN
 add name=LAN
 add name=ADMIN_ACCESS
 add name=DISCOVER
 /ip pool
-add name=dhcp_pool1 ranges=10.1.10.2-10.1.10.254
-add name=dhcp_pool2 ranges=10.1.20.2-10.1.20.254
-add name=dhcp_pool3 ranges=10.1.30.2-10.1.30.254
-add name=dhcp_pool4 ranges=10.1.40.2-10.1.40.254
+add name=dhcp_pool1 ranges=10.2.10.2-10.2.10.254
+add name=dhcp_pool2 ranges=10.2.20.2-10.2.20.254
+add name=dhcp_pool3 ranges=10.2.30.2-10.2.30.254
+add name=dhcp_pool4 ranges=10.2.40.2-10.2.40.254
+add name=dhcp_pool5 ranges=10.2.100.2-10.2.100.254
+add name=pool6-temp ranges=192.168.10.2-192.168.100.254
 /ip dhcp-server
 add address-pool=dhcp_pool1 interface=vlan10_eth name=dhcp1
 add address-pool=dhcp_pool2 interface=vlan20_wlan name=dhcp2
 add address-pool=dhcp_pool3 interface=vlan30_iot name=dhcp3
-add address-pool=dhcp_pool4 interface=vlan40_guest name=dhcp4
+add address-pool=dhcp_pool4 interface=vlan40_iptv name=dhcp4
+add address-pool=dhcp_pool5 interface=vlan100_eth name=dhcp5
 /queue tree
 add comment="Total Download Bandwidth" max-limit=400M name=Total_Download \
     parent=global
@@ -86,19 +77,19 @@ add comment="High Priority WiFi" max-limit=400M name=Queue_WLAN_DL \
 add comment="IoT with reservation" limit-at=10M max-limit=50M name=\
     Queue_IoT_DL packet-mark=pkt_iot_down parent=Total_Download priority=4 \
     queue=pcq_dl
-add comment="Lowest Priority Guest" max-limit=20M name=Queue_Guest_DL \
-    packet-mark=pkt_guest_down parent=Total_Download queue=pcq_dl
 add comment="High Priority Wired UL" max-limit=400M name=Queue_Eth_UL \
     packet-mark=pkt_eth_up parent=Total_Upload priority=2 queue=pcq_ul
 add comment="High Priority WiFi UL" max-limit=400M name=Queue_WLAN_UL \
     packet-mark=pkt_wlan_up parent=Total_Upload priority=2 queue=pcq_ul
 add comment="IoT UL reservation" limit-at=10M max-limit=50M name=Queue_IoT_UL \
     packet-mark=pkt_iot_up parent=Total_Upload priority=4 queue=pcq_ul
-add comment="Lowest Priority Guest UL" max-limit=20M name=Queue_Guest_UL \
-    packet-mark=pkt_guest_up parent=Total_Upload queue=pcq_ul
+add comment="IPTV Download Limit" max-limit=30M name=Queue_IPTV_DL \
+    packet-mark=pkt_iptv_down parent=Total_Download priority=4 queue=pcq_dl
+add comment="IPTV Upload Limit" max-limit=30M name=Queue_IPTV_UL packet-mark=\
+    pkt_iptv_up parent=Total_Upload priority=4 queue=pcq_ul
 /system logging action
 set 0 memory-lines=9999
-set 1 disk-file-count=1000 disk-file-name=usb1-part1/logs/system-log
+set 1 disk-lines-per-file=9999
 /system script
 add dont-require-permissions=no name=sys_reboot owner=ilya policy=\
     ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=\
@@ -174,7 +165,7 @@ add dont-require-permissions=no name=root_certs_fetch owner=ilya policy=\
     \n}"
 add dont-require-permissions=no name=ping_dns owner=ilya policy=\
     ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source="/\
-    tool fetch url=\"https://link-ip.nextdns.io/5a7224/8556d92b19f0274a\" outp\
+    tool fetch url=\"https://link-ip.nextdns.io/38c971/bf8a78ee037487fe\" outp\
     ut=none"
 add dont-require-permissions=no name=dark_mode owner=ilya policy=\
     ftp,reboot,read,write,policy,test,password,sniff,sensitive,romon source=":\
@@ -183,45 +174,28 @@ add dont-require-permissions=no name=dark_mode owner=ilya policy=\
     \n} else={\r\
     \n    /system leds settings set all-leds-off=never \r\
     \n}"
-/app
-set cinny firewall-redirects=8094:80:tcp:web
-set goaway container-command-lines=goaway:none:docker.io/pommee/goaway:latest
-set home-assistant container-command-lines=\
-    home-assistant:none:lscr.io/linuxserver/homeassistant
-set n8n firewall-redirects=5678:5678:tcp:web
-set nextcloud container-command-lines="db:none:docker.io/postgres:17,redis:non\
-    e:docker.io/valkey/valkey:/bin/sh -c 'valkey-server --port 6379 --appendon\
-    ly yes --requirepass \$VALKEY_PASSWORD',server:none:docker.io/nextcloud:ap\
-    ache"
-set pihole environment="pihole:FTLCONF_dns_listeningMode=all,pihole:FTLCONF_we\
-    bserver_api_password=password"
-set redlib firewall-redirects=8087:8080:tcp:web
-set solr container-command-lines=solr:none:docker.io/solr:latest
-set uptime-kuma container-command-lines=\
-    uptime-kuma:none:docker.io/louislam/uptime-kuma:1
-/app settings
-set auto-update=yes disk=usb1-part1 lan-bridge=bridge
-/disk settings
-set auto-media-interface=bridge
 /interface bridge port
-add bridge=bridge interface=ether2 pvid=10
+add bridge=bridge interface=ether2
 add bridge=bridge interface=ether3 pvid=10
 add bridge=bridge interface=ether4 pvid=10
 add bridge=bridge interface=wifi_2.4 pvid=20
 add bridge=bridge interface=wifi_5 pvid=20
 add bridge=bridge interface=wifi_2.4_iot pvid=30
-add bridge=bridge interface=wifi_2.4_guest pvid=40
-add bridge=bridge interface=wifi_5_guest pvid=40
+add bridge=bridge interface=wifi_5_backhaul pvid=10
 /ip neighbor discovery-settings
 set discover-interface-list=DISCOVER
 /ipv6 settings
 set disable-ipv6=yes
+/interface bridge vlan
+add bridge=bridge tagged=bridge,wifi_5_backhaul vlan-ids=20
+add bridge=bridge tagged=bridge,wifi_5_backhaul vlan-ids=30
+add bridge=bridge tagged=bridge,ether2 vlan-ids=40
+add bridge=bridge tagged=bridge,ether2 vlan-ids=100
 /interface list member
 add interface=ether1 list=WAN
 add interface=vlan10_eth list=TRUSTED_LAN
 add interface=vlan20_wlan list=TRUSTED_LAN
 add interface=vlan30_iot list=UNTRUSTED_LAN
-add interface=vlan40_guest list=GUEST_LAN
 add interface=pppoe-homeline list=WAN
 add interface=bridge list=LAN
 add interface=ether5 list=ADMIN_ACCESS
@@ -233,46 +207,62 @@ add interface=wg-client list=DISCOVER
 add interface=ether5 list=DISCOVER
 add interface=vlan10_eth list=DISCOVER
 add interface=vlan20_wlan list=DISCOVER
+add interface=vlan40_iptv list=UNTRUSTED_LAN
+add interface=vlan100_eth list=LAN
+add interface=vlan100_eth list=TRUSTED_LAN
+add interface=vlan100_eth list=DISCOVER
 /interface wireguard peers
-add allowed-address="10.99.0.0/24,10.2.10.0/24,10.2.20.0/24,10.2.30.0/24,10.2.\
-    40.0/24,10.2.100.0/24" endpoint-address=65.21.177.182 endpoint-port=51820 \
-    interface=wg-client name=peer5 persistent-keepalive=25s public-key=\
-    "ZmZHjY9sfkdqe48ytWQ7hq5YYWojtskxUWXZoOKPTU0="
+add allowed-address=\
+    10.99.0.0/24,10.1.10.0/24,10.1.20.0/24,10.1.30.0/24,10.1.40.0/24 \
+    client-allowed-address=::/0 endpoint-address=65.21.177.182 endpoint-port=\
+    51820 interface=wg-client name=peer1 persistent-keepalive=25s public-key=\
+    "WGxjeOkNYGXY2VG/jSCnEUVtNSbgjtpN1/TyzU6jzXI="
 /ip address
-add address=10.1.10.1/24 comment="Ethernet Gateway" interface=vlan10_eth \
-    network=10.1.10.0
-add address=10.1.20.1/24 comment="WLAN Gateway" interface=vlan20_wlan \
-    network=10.1.20.0
-add address=10.1.30.1/24 comment="IoT Gateway" interface=vlan30_iot network=\
-    10.1.30.0
-add address=10.1.40.1/24 comment="Guest Gateway" interface=vlan40_guest \
-    network=10.1.40.0
+add address=10.2.10.1/24 comment="Ethernet Gateway" interface=vlan10_eth \
+    network=10.2.10.0
+add address=10.2.20.1/24 comment="WLAN Gateway" interface=vlan20_wlan \
+    network=10.2.20.0
+add address=10.2.30.1/24 comment="IoT Gateway" interface=vlan30_iot network=\
+    10.2.30.0
 add address=192.168.88.1/24 comment="Admin access network" interface=ether5 \
     network=192.168.88.0
-add address=10.99.0.11/24 comment="Wireguard overlay hub" interface=wg-client \
+add address=10.99.0.12/24 comment="Wireguard overlay" interface=wg-client \
     network=10.99.0.0
+add address=10.2.40.1/24 comment="IPTV Gateway" interface=vlan40_iptv \
+    network=10.2.40.0
+add address=10.2.100.1/24 comment="Switch admin access" interface=vlan100_eth \
+    network=10.2.100.0
 /ip cloud
 set update-time=no
+/ip dhcp-server lease
+add address=10.2.10.252 client-id=1:78:9a:18:fd:1f:72 mac-address=\
+    78:9A:18:FD:1F:72 server=dhcp1
+add address=10.2.100.254 client-id=1:d4:1:c3:19:ec:c3 mac-address=\
+    D4:01:C3:19:EC:C3 server=dhcp5
+add address=10.2.30.3 client-id=1:50:57:9c:91:50:a7 mac-address=\
+    50:57:9C:91:50:A7 server=dhcp3
 /ip dhcp-server network
-add address=10.1.10.0/24 dns-server=10.1.10.1 gateway=10.1.10.1
-add address=10.1.20.0/24 dns-server=10.1.20.1 gateway=10.1.20.1
-add address=10.1.30.0/24 dns-server=1.1.1.1,8.8.8.8,8.8.4.4,9.9.9.9 gateway=\
-    10.1.30.1 ntp-server=10.1.30.1
-add address=10.1.40.0/24 dns-server=1.1.1.1,8.8.8.8,8.8.4.4,9.9.9.9 gateway=\
-    10.1.40.1 ntp-server=10.1.40.1
+add address=10.2.10.0/24 dns-server=10.2.10.1 gateway=10.2.10.1
+add address=10.2.20.0/24 dns-server=10.2.20.1 gateway=10.2.20.1
+add address=10.2.30.0/24 gateway=10.2.30.1 ntp-server=10.2.30.1
+add address=10.2.40.0/24 dns-server=\
+    94.143.199.235,94.143.199.236,1.1.1.1,8.8.8.8 gateway=10.2.40.1 \
+    ntp-server=10.2.40.1
+add address=10.2.100.0/24 gateway=10.2.100.1 ntp-server=10.2.100.1
 /ip dns
 set allow-remote-requests=yes cache-size=8192KiB doh-max-concurrent-queries=\
     200 doh-max-server-connections=20 doh-timeout=10s max-concurrent-queries=\
     1000 max-concurrent-tcp-sessions=100 mdns-repeat-ifaces=\
-    vlan10_eth,vlan20_wlan,vlan30_iot,vlan40_guest use-doh-server=\
-    https://dns.nextdns.io/5a7224/MikroTik verify-doh-cert=yes
+    vlan10_eth,vlan20_wlan,vlan30_iot use-doh-server=\
+    https://dns.nextdns.io/38c971/MikroTik verify-doh-cert=yes
 /ip dns static
 add address=192.168.88.1 name=router.lan type=A
 add address=45.90.28.0 name=dns.nextdns.io type=A
 add address=45.90.30.0 name=dns.nextdns.io type=A
-add address=2a07:a8c0:: name=dns.nextdns.io type=AAAA
-add address=2a07:a8c1:: name=dns.nextdns.io type=AAAA
+add address=10.2.10.252 name=extender.lan type=A
+add address=10.2.100.254 name=crs.lan type=A
 add forward-to=10.99.0.1 match-subdomain=yes name=in.threadnull.dev type=FWD
+add address=10.2.30.3 name=printer.lan type=A
 /ip firewall address-list
 add address=0.0.0.0/8 list=Bogons
 add address=10.0.0.0/8 list=Bogons
@@ -289,9 +279,9 @@ add address=203.0.113.0/24 list=Bogons
 add address=224.0.0.0/4 list=Bogons
 add address=240.0.0.0/4 comment="Bogon and Martian ranges" list=Bogons
 add address=192.168.88.0/24 comment="Admin access range" list=Admin_Access
-add address=10.1.10.0/24 comment="Management from Trusted Wired" list=\
+add address=10.2.10.0/24 comment="Management from Trusted Wired" list=\
     Admin_Access
-add address=10.1.20.0/24 comment="Management from Trusted WiFi" list=\
+add address=10.2.20.0/24 comment="Management from Trusted WiFi" list=\
     Admin_Access
 /ip firewall filter
 add action=add-src-to-address-list address-list=Port_Scanners \
@@ -310,6 +300,8 @@ add action=accept chain=input comment="IaC: Allow Trusted mDNS" dst-address=\
     224.0.0.251 dst-port=5353 in-interface-list=TRUSTED_LAN protocol=udp
 add action=accept chain=input comment="IaC: Allow IoT mDNS" dst-address=\
     224.0.0.251 dst-port=5353 in-interface-list=UNTRUSTED_LAN protocol=udp
+add action=accept chain=input comment="IaC: Allow PMTUD (Type 3 Code 4)" \
+    icmp-options=3:4 protocol=icmp
 add action=accept chain=input comment="IaC: Allow limited ICMP" limit=\
     50/5s,2:packet protocol=icmp
 add action=accept chain=input comment="IaC: Allow admin access" \
@@ -326,33 +318,26 @@ add action=accept chain=input comment="IaC: Allow IoT DNS UDP" dst-port=53 \
     in-interface-list=UNTRUSTED_LAN protocol=udp
 add action=accept chain=input comment="IaC: Allow IoT DNS TCP" dst-port=53 \
     in-interface-list=UNTRUSTED_LAN protocol=tcp
-add action=accept chain=input comment="IaC: Allow Guest DHCP" dst-port=67 \
-    in-interface-list=GUEST_LAN protocol=udp
-add action=accept chain=input comment="IaC: Allow Guest DNS UDP" dst-port=53 \
-    in-interface-list=GUEST_LAN protocol=udp
-add action=accept chain=input comment="IaC: Allow Guest DNS TCP" dst-port=53 \
-    in-interface-list=GUEST_LAN protocol=tcp
 add action=accept chain=input comment="IaC: Allow LAN DNS UDP" dst-port=53 \
     in-interface-list=LAN protocol=udp
 add action=accept chain=input comment="IaC: Allow LAN DNS TCP" dst-port=53 \
     in-interface-list=LAN protocol=tcp
 add action=accept chain=input comment="IaC: Allow LAN DHCP" dst-port=67 \
     in-interface-list=LAN protocol=udp
-add action=accept chain=input comment=\
-    "IaC: Allow Tuya/IoT discovery broadcast" dst-address=255.255.255.255 \
-    dst-port=6666-6667 in-interface-list=UNTRUSTED_LAN protocol=udp
+add action=accept chain=input comment="IaC: Allow IoT NTP UDP" dst-port=123 \
+    in-interface-list=UNTRUSTED_LAN protocol=udp
 add action=drop chain=input comment="IaC: Drop IoT to Router" \
-    in-interface-list=UNTRUSTED_LAN log=yes log-prefix=Drop_IoT_to_Router
-add action=drop chain=input comment="IaC: Drop Guest to Router" \
-    in-interface-list=GUEST_LAN log=yes log-prefix=Drop_Guest_to_Router
+    in-interface-list=UNTRUSTED_LAN log-prefix=Drop_IoT_to_Router
 add action=accept chain=input comment="IaC: Allow VPN DNS UDP" dst-port=53 \
     in-interface-list=VPN protocol=udp
 add action=accept chain=input comment="IaC: Allow VPN DNS TCP" dst-port=53 \
     in-interface-list=VPN protocol=tcp
 add action=accept chain=input comment="IaC: Allow Management from VPN" \
     dst-port=8291,5946 in-interface-list=VPN protocol=tcp
-add action=drop chain=input comment="IaC: Drop all other input" log=yes \
-    log-prefix=Drop_Input_Catchall
+add action=accept chain=input comment="IaC: Allow MNDP" dst-port=5678 \
+    in-interface-list=DISCOVER protocol=udp
+add action=drop chain=input comment="IaC: Drop all other input" log-prefix=\
+    Drop_Input_Catchall
 add action=accept chain=forward comment=\
     "IaC: Accept established, related, untracked" connection-state=\
     established,related,untracked
@@ -374,25 +359,19 @@ add action=drop chain=forward comment="IaC: Drop IoT to Trusted LAN" \
 add action=drop chain=forward comment="IaC: Drop IoT to VPN" \
     in-interface-list=UNTRUSTED_LAN log=yes log-prefix=Drop_IoT_to_VPN \
     out-interface-list=VPN
-add action=drop chain=forward comment="IaC: Drop Guest to Trusted" \
-    in-interface-list=GUEST_LAN log=yes log-prefix=Drop_Guest_to_Trusted \
-    out-interface-list=TRUSTED_LAN
-add action=drop chain=forward comment="IaC: Drop Guest to IoT" \
-    in-interface-list=GUEST_LAN log=yes log-prefix=Drop_Guest_to_IoT \
-    out-interface-list=UNTRUSTED_LAN
 add action=accept chain=forward comment="IaC: Allow port forwarding" \
     connection-nat-state=dstnat
 add action=accept chain=forward comment="IaC: Allow Trusted to WAN" \
     in-interface-list=TRUSTED_LAN out-interface-list=WAN
 add action=accept chain=forward comment="IaC: Allow IoT to WAN" \
     in-interface-list=UNTRUSTED_LAN out-interface-list=WAN
-add action=accept chain=forward comment="IaC: Allow Guest to WAN" \
-    in-interface-list=GUEST_LAN out-interface-list=WAN
 add action=accept chain=forward comment="IaC: Allow VPN to WAN" \
     in-interface-list=VPN out-interface-list=WAN
 add action=accept chain=forward comment="IaC: Allow VPN to TRUSTED_LAN" \
     in-interface-list=VPN out-interface-list=TRUSTED_LAN
-add action=accept chain=forward comment="IaC: Allow TRUSTED_LAN to VPN" \
+add action=accept chain=forward comment="IaC: Allow Trusted to Trusted" \
+    in-interface-list=TRUSTED_LAN out-interface-list=TRUSTED_LAN
+add action=accept chain=forward comment="IaC: Allow Trusted to VPN" \
     in-interface-list=TRUSTED_LAN out-interface-list=VPN
 add action=drop chain=forward comment="IaC: Drop all other forward" log=yes \
     log-prefix=Drop_Forward_Catchall
@@ -403,28 +382,26 @@ add action=mark-packet chain=forward comment="Mark WLAN DL" new-packet-mark=\
     pkt_wlan_down out-interface=vlan20_wlan passthrough=no
 add action=mark-packet chain=forward comment="Mark IoT DL" new-packet-mark=\
     pkt_iot_down out-interface=vlan30_iot passthrough=no
-add action=mark-packet chain=forward comment="Mark Guest DL" new-packet-mark=\
-    pkt_guest_down out-interface=vlan40_guest passthrough=no
 add action=mark-packet chain=forward comment="Mark Ethernet UL" in-interface=\
     vlan10_eth new-packet-mark=pkt_eth_up passthrough=no
 add action=mark-packet chain=forward comment="Mark WLAN UL" in-interface=\
     vlan20_wlan new-packet-mark=pkt_wlan_up passthrough=no
 add action=mark-packet chain=forward comment="Mark IoT UL" in-interface=\
     vlan30_iot new-packet-mark=pkt_iot_up passthrough=no
-add action=mark-packet chain=forward comment="Mark Guest UL" in-interface=\
-    vlan40_guest new-packet-mark=pkt_guest_up passthrough=no
+add action=mark-packet chain=forward comment="Mark IPTV DL" new-packet-mark=\
+    pkt_iptv_down out-interface=vlan40_iptv passthrough=no
+add action=mark-packet chain=forward comment="Mark IPTV UL" in-interface=\
+    vlan40_iptv new-packet-mark=pkt_iptv_up passthrough=no
 /ip firewall nat
 add action=masquerade chain=srcnat out-interface-list=WAN
 /ip route
-add comment="IaC overlay route: site_b" dst-address=10.2.10.0/24 gateway=\
+add comment="IaC overlay route: site_a" dst-address=10.1.10.0/24 gateway=\
     wg-client
-add comment="IaC overlay route: site_b" dst-address=10.2.20.0/24 gateway=\
+add comment="IaC overlay route: site_a" dst-address=10.1.20.0/24 gateway=\
     wg-client
-add comment="IaC overlay route: site_b" dst-address=10.2.30.0/24 gateway=\
+add comment="IaC overlay route: site_a" dst-address=10.1.30.0/24 gateway=\
     wg-client
-add comment="IaC overlay route: site_b" dst-address=10.2.40.0/24 gateway=\
-    wg-client
-add comment="IaC overlay route: site_b" dst-address=10.2.100.0/24 gateway=\
+add comment="IaC overlay route: site_a" dst-address=10.1.40.0/24 gateway=\
     wg-client
 /ip service
 set ftp disabled=yes
@@ -435,15 +412,11 @@ set api disabled=yes
 /ip ssh
 set strong-crypto=yes
 /ipv6 firewall filter
-add action=drop chain=input comment="Drop all IPv6 input"
-add action=drop chain=forward comment="Drop all IPv6 forward"
-add action=drop chain=output comment="Drop all IPv6 output"
+add action=drop chain=input comment="IaC: Drop all IPv6 in input"
+add action=drop chain=forward comment="IaC: Drop all IPv6 in forward"
+add action=drop chain=output comment="IaC: Drop all IPv6 in output"
 /system clock
 set time-zone-name=Asia/Bishkek
-/system logging
-set 1 action=disk
-set 2 action=disk
-set 3 action=disk
 /system ntp client
 set enabled=yes
 /system ntp server

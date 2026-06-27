@@ -1,12 +1,12 @@
-# Managed by Ansible. {{ svc.name }} ({{ svc.ip }})
+# Managed by Ansible. {{ vpn_member_svc.name }} ({{ vpn_member_svc.ip }})
 [Interface]
-Address = {{ svc.ip }}/32
-PrivateKey = {{ member_keys[svc.name ~ '.priv'] }}
+Address = {{ vpn_member_svc.ip }}/32
+PrivateKey = {{ vpn_member_peer_keys[vpn_member_svc.name ~ '.priv'] }}
 DNS = {{ hub.ip }}
 
 [Peer]
-PublicKey = {{ member_keys['server.pub'] }}
-PresharedKey = {{ member_keys[svc.name ~ '.psk'] }}
+PublicKey = {{ vpn_member_peer_keys['server.pub'] }}
+PresharedKey = {{ vpn_member_peer_keys[vpn_member_svc.name ~ '.psk'] }}
 Endpoint = {{ hub.public_host }}:{{ wg_port }}
 {% set nets = [wg_network] %}
 {% for sid, s in sites.items() %}{% for n in s.subnets %}{% set _ = nets.append(n) %}{% endfor %}{% endfor %}

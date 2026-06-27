@@ -3,15 +3,15 @@
 [Interface]
 Address = {{ hub.ip }}/{{ wg_network.split('/')[1] }}
 ListenPort = {{ wg_port }}
-PrivateKey = {{ wg_server_keys['server.priv'] }}
+PrivateKey = {{ wg_hub_server_keys['server.priv'] }}
 Table = off
 
-{% for peer in wg_all_peers %}
+{% for peer in wg_hub_peers %}
 # {{ peer.kind }}: {{ peer.name }}{% if peer.description is defined %} - {{ peer.description }}{% endif %}
 
 [Peer]
-PublicKey = {{ wg_peer_data[peer.name]['pub'] }}
-PresharedKey = {{ wg_peer_data[peer.name]['psk'] }}
+PublicKey = {{ wg_hub_peer_data[peer.name]['pub'] }}
+PresharedKey = {{ wg_hub_peer_data[peer.name]['psk'] }}
 {% if peer.kind == 'site' and peer.exit_node | default(false) %}
 {# Exit node: 0.0.0.0/0 lets the hub encrypt internet-bound packets of
    home-profile clients towards it; all other peers' /32s and subnets

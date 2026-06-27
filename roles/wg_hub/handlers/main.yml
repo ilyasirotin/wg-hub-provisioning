@@ -12,12 +12,13 @@
     fi
   args:
     executable: /bin/bash
+  changed_when: true
 
 - name: Apply WireGuard routes
   ansible.builtin.systemd:
     name: wg0-routes
     state: restarted
-    daemon_reload: yes
+    daemon_reload: true
 
 - name: Reload nftables
   ansible.builtin.systemd:

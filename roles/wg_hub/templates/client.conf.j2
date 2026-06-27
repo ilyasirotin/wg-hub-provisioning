@@ -1,12 +1,12 @@
 # Managed by Ansible. {{ item.name }} (group: {{ item.group | default('admin') }}, profile: {{ item.profile | default('cloud') }})
 [Interface]
 Address = {{ item.ip }}/32
-PrivateKey = {{ wg_peer_data[item.name]['priv'] }}
+PrivateKey = {{ wg_hub_peer_data[item.name]['priv'] }}
 DNS = {{ hub.ip }}
 
 [Peer]
-PublicKey = {{ wg_server_keys['server.pub'] }}
-PresharedKey = {{ wg_peer_data[item.name]['psk'] }}
+PublicKey = {{ wg_hub_server_keys['server.pub'] }}
+PresharedKey = {{ wg_hub_peer_data[item.name]['psk'] }}
 Endpoint = {{ hub.public_host }}:{{ wg_port }}
 AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25

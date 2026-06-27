@@ -1,5 +1,5 @@
 #!/usr/sbin/nft -f
-# Managed by Ansible. Service {{ svc.name }}: public interface closed,
+# Managed by Ansible. Service {{ vpn_member_svc.name }}: public interface closed,
 # inbound only from the overlay and only on declared ports.
 # Source-based ACLs are enforced on the hub; this is a second line
 # of defense (defense in depth).
@@ -23,7 +23,7 @@ table inet filter {
 {% endif %}
         iifname "{{ wg_interface }}" tcp dport {{ ssh_port }} accept
 
-{% for r in svc.ingress | default([]) %}
+{% for r in vpn_member_svc.ingress | default([]) %}
         iifname "{{ wg_interface }}" {{ r.proto }} dport {{ r.port }} accept
 {% endfor %}
 

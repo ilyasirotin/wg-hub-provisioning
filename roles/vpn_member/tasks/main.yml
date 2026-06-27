@@ -5,8 +5,8 @@
 
 - name: Resolve own service entry from the model
   ansible.builtin.set_fact:
-    svc: "{{ services | selectattr('name', 'equalto', service_name) | first }}"
-    hub_host: "{{ groups['hub'][0] }}"
+    vpn_member_svc: "{{ services | selectattr('name', 'equalto', service_name) | first }}"
+    vpn_member_hub_host: "{{ groups['hub'][0] }}"
 
 - name: Install packages
   ansible.builtin.apt:
@@ -16,19 +16,19 @@
 - name: Fetch peer keys from the hub
   ansible.builtin.slurp:
     src: "{{ item }}"
-  register: _keys
-  delegate_to: "{{ hub_host }}"
+  register: vpn_member_keys_raw
+  delegate_to: "{{ vpn_member_hub_host }}"
   loop:
     - /etc/wireguard/server.pub
-    - "/etc/wireguard/clients/{{ svc.name }}.priv"
-    - "/etc/wireguard/clients/{{ svc.name }}.psk"
+    - "/etc/wireguard/clients/{{ vpn_member_svc.name }}.priv"
+    - "/etc/wireguard/clients/{{ vpn_member_svc.name }}.psk"
   no_log: true
 
 - name: Parse keys
   ansible.builtin.set_fact:
-    member_keys: >-
-      {{ dict(_keys.results | map(attribute='source') | map('basename')
-         | zip(_keys.results | map(attribute='content') | map('b64decode') | map('trim'))) }}
+    vpn_member_peer_keys: >-
+      {{ dict(vpn_member_keys_raw.results | map(attribute='source') | map('basename')
+         | zip(vpn_member_keys_raw.results | map(attribute='content') | map('b64decode') | map('trim'))) }}
   no_log: true
 
 - name: Deploy wg0.conf
@@ -50,7 +50,7 @@
 - name: Enable WireGuard and nftables
   ansible.builtin.systemd:
     name: "{{ item }}"
-    enabled: yes
+    enabled: true
     state: started
   loop:
     - "wg-quick@{{ wg_interface }}"
@@ -69,19 +69,19 @@
     path: /etc/wg-certs-sync/id_ed25519
     type: ed25519
     mode: "0600"
-  register: _synckey
+  register: vpn_member_synckey
 
 - name: Authorize this host on the hub (rrsync read-only, cert dir only)
   ansible.builtin.lineinfile:
     path: "/home/{{ cert_sync_user }}/.ssh/authorized_keys"
-    create: yes
+    create: true
     mode: "0600"
     owner: "{{ cert_sync_user }}"
     group: "{{ cert_sync_user }}"
     line: >-
-      restrict,command="{{ hostvars[hub_host]._rrsync_path | default('/usr/bin/rrsync') }} -ro {{ cert_publish_dir }}"
-      {{ _synckey.public_key }} {{ svc.name }}-certsync
-  delegate_to: "{{ hub_host }}"
+      restrict,command="{{ hostvars[vpn_member_hub_host].certs_hub_rrsync_path | default('/usr/bin/rrsync') }} -ro {{ cert_publish_dir }}"
+      {{ vpn_member_synckey.public_key }} {{ vpn_member_svc.name }}-certsync
+  delegate_to: "{{ vpn_member_hub_host }}"
   become: true
 
 - name: Create local cert directory
@@ -127,11 +127,57 @@
 - name: Enable cert-sync timer and run once
   ansible.builtin.systemd:
     name: cert-sync.timer
-    enabled: yes
+    enabled: true
     state: started
-    daemon_reload: yes
+    daemon_reload: true
 
 - name: Initial cert pull
   ansible.builtin.systemd:
     name: cert-sync.service
     state: started
+
+# ----------------------- nginx TLS reverse proxy (optional) ---------------------
+
+- name: Install nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+  when: vpn_member_svc.nginx | default(false)
+
+- name: Allow www-data to read cert directory
+  ansible.builtin.file:
+    path: /etc/wg-certs
+    state: directory
+    mode: "0750"
+    group: www-data
+  when: vpn_member_svc.nginx | default(false)
+
+- name: Deploy nginx reverse proxy config
+  ansible.builtin.template:
+    src: nginx-member.conf.j2
+    dest: "/etc/nginx/sites-available/{{ vpn_member_svc.name }}"
+    mode: "0644"
+  notify: Reload nginx
+  when: vpn_member_svc.nginx | default(false)
+
+- name: Enable nginx site
+  ansible.builtin.file:
+    src: "/etc/nginx/sites-available/{{ vpn_member_svc.name }}"
+    dest: "/etc/nginx/sites-enabled/{{ vpn_member_svc.name }}"
+    state: link
+  notify: Reload nginx
+  when: vpn_member_svc.nginx | default(false)
+
+- name: Remove default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+  when: vpn_member_svc.nginx | default(false)
+
+- name: Enable and start nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started
+  when: vpn_member_svc.nginx | default(false)

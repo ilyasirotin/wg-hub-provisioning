@@ -1,4 +1,4 @@
-# wg-infra
+# wg-hub-provisioning
 
 Declarative WireGuard overlay: a hub VPS (Hetzner) ties together MikroTik
 home sites, service VPSes, and personal devices. Internal DNS zone

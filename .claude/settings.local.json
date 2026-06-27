@@ -1,11 +1,18 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(touch /tmp/claude-1000/-home-ilia-Projects-wg-infra/3adf213e-30d8-41fc-9505-f2b5b1df835f/scratchpad/test)",
+      "Bash(export HOME=$SCRATCH/smoke-home)",
+      "Bash(ansible-playbook playbooks/hub.yml --syntax-check -e ansible_port=22)",
+      "Bash(bash scripts/smoke.sh syntax 2>&1)",
+      "Bash(bash scripts/smoke.sh lint)",
+      "Bash(xxd)",
+      "Bash(bash /home/ilia/Projects/wg-infra/scripts/smoke.sh lint 2>&1)",
+      "Bash(bash /home/ilia/Projects/wg-infra/scripts/smoke.sh all 2>&1)"
+    ]
+  },
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": false
-  },
-  "permissions": {
-    "allow": [
-      "Bash(touch /tmp/claude-1000/-home-ilia-Projects-wg-infra/3adf213e-30d8-41fc-9505-f2b5b1df835f/scratchpad/test)"
-    ]
   }
 }

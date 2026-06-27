@@ -4,7 +4,7 @@
 # services, no LANs; sites - site-to-site + allowed services;
 # services - declared ingress/egress only; iot - pinpoint service access.
 
-{% set pub_if = ansible_default_ipv4.interface %}
+{% set pub_if = ansible_facts['default_ipv4']['interface'] %}
 {% set admin_ips = clients | selectattr('group', 'defined') | selectattr('group', 'equalto', 'admin') | map(attribute='ip') | list %}
 {% set user_ips = clients | selectattr('group', 'defined') | selectattr('group', 'equalto', 'user') | map(attribute='ip') | list %}
 {% set service_ips = services | map(attribute='ip') | list %}

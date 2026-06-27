@@ -100,25 +100,29 @@
   ansible.builtin.command: /usr/local/sbin/lego-renew.sh
   environment:
     CLOUDFLARE_DNS_API_TOKEN: "{{ cloudflare_dns_api_token }}"
-  register: _lego_run
-  changed_when: "'Server responded with a certificate' in _lego_run.stdout or _lego_run.rc == 0"
-  failed_when: _lego_run.rc != 0
+  register: certs_hub_lego_run
+  changed_when: "'Server responded with a certificate' in certs_hub_lego_run.stdout or certs_hub_lego_run.rc == 0"
+  failed_when: certs_hub_lego_run.rc != 0
   no_log: false
 
 - name: Locate rrsync helper
-  ansible.builtin.shell: command -v rrsync || ls /usr/share/rsync/scripts/rrsync 2>/dev/null | head -1
-  register: _rrsync
+  ansible.builtin.shell: |
+    set -o pipefail
+    command -v rrsync 2>/dev/null || { ls /usr/share/rsync/scripts/rrsync 2>/dev/null | head -1; }
+  args:
+    executable: /bin/bash
+  register: certs_hub_rrsync
   changed_when: false
 
 - name: Remember rrsync path (used by vpn_member via hostvars)
   ansible.builtin.set_fact:
-    _rrsync_path: "{{ _rrsync.stdout | trim }}"
+    certs_hub_rrsync_path: "{{ certs_hub_rrsync.stdout | trim }}"
 
 - name: Make rrsync executable if shipped as a script
   ansible.builtin.file:
-    path: "{{ _rrsync.stdout | trim }}"
+    path: "{{ certs_hub_rrsync.stdout | trim }}"
     mode: "0755"
-  when: _rrsync.stdout | trim | length > 0
+  when: certs_hub_rrsync.stdout | trim | length > 0
 
 - name: Prepare authorized_keys dir for certsync
   ansible.builtin.file:

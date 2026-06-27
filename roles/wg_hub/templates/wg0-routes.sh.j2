@@ -2,7 +2,7 @@
 # Managed by Ansible. Overlay/site routes and home-profile PBR.
 # Kept out of PostUp so that peer changes apply via `wg syncconf`
 # without restarting the interface.
-set -u
+set -eu
 
 IFACE="{{ wg_interface }}"
 ACTION="${1:-up}"

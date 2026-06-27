@@ -75,7 +75,7 @@ sites:
 #   profile: home  -> internet egress via the exit-node router (home IP)
 # ---------------------------------------------------------------------
 clients:
-  - name: main_home
+  - name: pixel_1o_pro
     ip: 10.99.0.20
     group: admin
     profile: home          # internet egress via the exit-node home router

@@ -2,3 +2,41 @@
 rendered/
 group_vars/all/vault.yml.plain
 .vault-pass
+
+# Python / tooling
+.venv/
+__pycache__/
+*.py[cod]
+
+# Ansible runtime artifacts (galaxy downloads, tmp)
+.ansible/
+
+# WireGuard private material — never in source control
+*.priv
+*.psk
+
+# IDE
+.idea/
+.vscode/
+
+# Shell dotfiles / personal configs that land in the project dir
+.bash_profile
+.bashrc
+.profile
+.zprofile
+.zshrc
+.gitconfig
+.mcp.json
+.ripgreprc
+.gitmodules
+
+# Claude Code operational/local files
+# (settings.json and skills/ are intentionally committed)
+.claude/agents
+.claude/commands
+.claude/hooks
+.claude/workflows
+.claude/routines
+.claude/scheduled_tasks.json
+.claude/launch.json
+.claude/settings.local.json
