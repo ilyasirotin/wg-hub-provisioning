@@ -40,10 +40,16 @@ ansible-playbook playbooks/hub.yml --ask-vault-pass
 ansible-playbook playbooks/services.yml --limit <host> --ask-vault-pass
 ```
 
-Bootstrap nuance: a fresh hub has sshd on port 22; the run moves it to 5860.
-First run only: `-e ansible_port=22`. Same pattern for service VPSes (public
-IP + port 22 on first contact, then switch `inventory.yml` to the wg address
-and `member_public_ssh: false`). `host_key_checking` is **on**.
+Bootstrap nuance: `base_hardening` moves sshd from 22 → 5860 via a handler at the end
+of the role; pipelining keeps the session alive through the restart.
+
+- **Hub first run**: override on the CLI: `-e ansible_host=<hub-public-ip> -e ansible_port=22`.
+  Subsequent runs use inventory values (control machine must be on the overlay).
+- **Service VPS first run**: set `ansible_port: 22` directly in `inventory.yml`. Do **not**
+  use `-e ansible_port=22` — that overrides the hub port globally and breaks `delegate_to`.
+  After bootstrap, switch `ansible_host` to the overlay IP and `ansible_port` to 5860.
+
+`host_key_checking` is **on**.
 
 ## Architecture
 

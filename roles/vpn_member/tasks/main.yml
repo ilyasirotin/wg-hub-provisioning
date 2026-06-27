@@ -13,6 +13,18 @@
     name: [wireguard, openresolv]
     state: present
 
+- name: Verify hub overlay connectivity before fetching keys
+  ansible.builtin.wait_for:
+    host: "{{ hostvars[vpn_member_hub_host].ansible_host }}"
+    port: "{{ hostvars[vpn_member_hub_host].ansible_port | default(22) }}"
+    timeout: 10
+    msg: >-
+      Cannot reach hub {{ vpn_member_hub_host }}
+      ({{ hostvars[vpn_member_hub_host].ansible_host }}:{{ hostvars[vpn_member_hub_host].ansible_port }}).
+      The Ansible control machine must be an active WireGuard overlay peer —
+      start your WireGuard client and re-run.
+  delegate_to: localhost
+
 - name: Fetch peer keys from the hub
   ansible.builtin.slurp:
     src: "{{ item }}"

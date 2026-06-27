@@ -84,7 +84,7 @@
   ansible.builtin.user:
     name: "{{ cert_sync_user }}"
     system: true
-    shell: /usr/sbin/nologin
+    shell: /bin/bash
     create_home: true
     home: "/home/{{ cert_sync_user }}"
 
