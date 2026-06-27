@@ -106,5 +106,5 @@ it on the hub via `delegate_to`).
   `99` reserved for the overlay) are load-bearing for readability and for the
   generated sets — follow them.
 
-`site_a_backup.rsc` / `site_b_backup.rsc` at the repo root are full MikroTik
+`routeros/site_a_backup.rsc` / `routeros/site_b_backup.rsc` at the repo root are full MikroTik
 router config exports kept for reference, not rendered artifacts.

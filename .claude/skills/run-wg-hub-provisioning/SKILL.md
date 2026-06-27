@@ -1,9 +1,9 @@
 ---
-name: run-wg-infra
-description: run, lint, syntax-check, test, verify wg-infra Ansible playbooks for WireGuard overlay
+name: run-wg-hub-provisioning
+description: run, lint, syntax-check, test, verify wg-hub-provisioning Ansible playbooks for WireGuard overlay
 ---
 
-# run-wg-infra
+# run-wg-hub-provisioning
 
 Ansible IaC project — no GUI, no server to start. The "app" is the playbooks and roles.
 The driver is `scripts/smoke.sh` (CLI smoke script). It validates Jinja2/YAML syntax
@@ -19,7 +19,7 @@ Collections are pre-installed in `.venv/.ansible/collections`.
 ## Setup
 
 ```bash
-cd /home/ilia/Projects/wg-infra
+cd ~/Projects/wg-hub-provisioning
 source .venv/bin/activate
 ansible-galaxy collection install -r requirements.yml   # idempotent; says "Nothing to do" if current
 ```
@@ -90,10 +90,6 @@ ansible-playbook playbooks/hub.yml -e ansible_port=22 --ask-vault-pass
 
 ## Troubleshooting
 
-**`[Errno 30] Read-only file system: '/home/ilia/.ansible/tmp/…'`**
+**`[Errno 30] Read-only file system: '~/.ansible/tmp/…'`**
 → `export ANSIBLE_LOCAL_TEMP=/tmp/writable-dir` before running, or let `smoke.sh`
   handle it (it probes writability and falls back to `mktemp` automatically).
-
-**`lint: 28 failure(s)` (pre-refactor baseline)**
-→ Expected before the lint-fix pass. Run `bash scripts/smoke.sh lint` again after
-  fixing to confirm 0 violations.

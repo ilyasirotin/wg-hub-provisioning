@@ -13,9 +13,10 @@ all:
     # Hetzner panel; once the host is inside the overlay, switch it to the
     # wg address and set member_public_ssh: false.
     services:
-      hosts: {}
-      # ha-vps:
-      #   ansible_host: 10.99.0.100      # public IP during bootstrap
-      #   ansible_user: wg
-      #   ansible_port: 5860             # 22 on the very first run
-      #   service_name: ha               # entry name in network.yml
+      hosts:
+        ha-vps:
+          ansible_host: 65.21.187.190    # public IP during bootstrap
+          ansible_user: ha
+          ansible_port: 5860             # 22 on the very first run
+          service_name: ha               # entry name in network.yml
+          # member_public_ssh: false       # SSH only via wg0; emergency access via Hetzner console

@@ -75,10 +75,15 @@ sites:
 #   profile: home  -> internet egress via the exit-node router (home IP)
 # ---------------------------------------------------------------------
 clients:
-  - name: pixel_1o_pro
+  - name: pixel_10_pro_home
     ip: 10.99.0.20
     group: admin
     profile: home          # internet egress via the exit-node home router
+
+  - name: pixel_10_pro_cloud
+    ip: 10.99.0.21
+    group: user
+    profile: cloud         # internet egress via the VPS (Hetzner IP)
 
   # Example family member:
   # - name: wife_phone
@@ -115,4 +120,14 @@ clients:
 # Workflow: edit here -> ansible-playbook playbooks/hub.yml
 #                     -> ansible-playbook playbooks/services.yml
 # ---------------------------------------------------------------------
-services: []
+services:
+  - name: ha
+    ip: 10.99.0.100
+    dns_names: [ha]
+    nginx: true
+    nginx_upstream: 127.0.0.1:8123
+    ingress:                          # who may connect, and where
+      - { proto: tcp, port: 443, from: [users, sites, iot] }
+      - { proto: tcp, port: 8883, from: [iot] }       # MQTT over TLS
+    egress:                           # flows the service may open itself
+      - { to: iot_subnets }
