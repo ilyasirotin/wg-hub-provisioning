@@ -194,6 +194,22 @@
   changed_when: wg_hub_resolv is changed
   failed_when: false
 
+- name: Create dnsmasq systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/dnsmasq.service.d
+    state: directory
+    mode: "0755"
+
+- name: Deploy dnsmasq systemd drop-in (start after wg0)
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dnsmasq.service.d/wg-ordering.conf
+    mode: "0644"
+    content: |
+      [Unit]
+      After=wg-quick@{{ wg_interface }}.service
+      Wants=wg-quick@{{ wg_interface }}.service
+  notify: Restart dnsmasq
+
 - name: Deploy dnsmasq internal-zone config
   ansible.builtin.template:
     src: dnsmasq-internal.conf.j2

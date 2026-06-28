@@ -15,8 +15,23 @@ all:
     services:
       hosts:
         ha-vps:
-          ansible_host: 65.21.187.190    # public IP during bootstrap
+          ansible_host: 10.99.0.100       # public IP during bootstrap; switch to overlay IP after
           ansible_user: ha
-          ansible_port: 5860             # 22 on the very first run
-          service_name: ha               # entry name in network.yml
-          # member_public_ssh: false       # SSH only via wg0; emergency access via Hetzner console
+          ansible_port: 5860              # base_hardening switches to 5860 mid-play; no -e needed
+          service_name: ha                # entry name in network.yml
+          member_public_ssh: false        # SSH via public IP during bootstrap; switch to false after
+          # After bootstrap, update to:
+          #   ansible_host: 10.99.0.100  (overlay IP)
+          #   ansible_port: 5860
+          #   member_public_ssh: false   # SSH only via wg0; emergency access via Hetzner console
+
+        metrics-vps:
+          ansible_host: 10.99.0.101       # public IP during bootstrap; switch to overlay IP after
+          ansible_user: metrics
+          ansible_port: 22                # base_hardening switches to 5860 mid-play; no -e needed
+          service_name: metrics           # entry name in network.yml
+          member_public_ssh: false        # SSH via public IP during bootstrap; switch to false after
+          # After bootstrap, update to:
+          #   ansible_host: 10.99.0.101  (overlay IP)
+          #   ansible_port: 5860
+          #   member_public_ssh: false   # SSH only via wg0; emergency access via Hetzner console
