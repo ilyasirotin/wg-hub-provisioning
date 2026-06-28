@@ -206,6 +206,7 @@
     mode: "0644"
     content: |
       [Unit]
+      Before=
       After=wg-quick@{{ wg_interface }}.service
       Wants=wg-quick@{{ wg_interface }}.service
   notify: Restart dnsmasq

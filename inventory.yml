@@ -3,7 +3,7 @@ all:
     hub:
       hosts:
         vps-relay-01:
-          ansible_host: 10.99.0.1
+          ansible_host: 65.21.177.182
           ansible_user: wg
           ansible_port: 5860
           # First run on a fresh server (sshd still on 22):
@@ -12,26 +12,15 @@ all:
     # Service VPSes. On bootstrap ansible_host is the public IP from the
     # Hetzner panel; once the host is inside the overlay, switch it to the
     # wg address and set member_public_ssh: false.
-    services:
-      hosts:
-        ha-vps:
-          ansible_host: 10.99.0.100       # public IP during bootstrap; switch to overlay IP after
-          ansible_user: ha
-          ansible_port: 5860              # base_hardening switches to 5860 mid-play; no -e needed
-          service_name: ha                # entry name in network.yml
-          member_public_ssh: false        # SSH via public IP during bootstrap; switch to false after
+    services: {}
+      # hosts:
+      #   general-node:
+      #     ansible_host: 10.99.0.100       # public IP during bootstrap; switch to overlay IP after
+      #     ansible_user: ha
+      #     ansible_port: 5860              # base_hardening switches to 5860 mid-play; no -e needed
+      #     service_name: ha                # entry name in network.yml
+      #     member_public_ssh: false        # SSH via public IP during bootstrap; switch to false after
           # After bootstrap, update to:
           #   ansible_host: 10.99.0.100  (overlay IP)
-          #   ansible_port: 5860
-          #   member_public_ssh: false   # SSH only via wg0; emergency access via Hetzner console
-
-        metrics-vps:
-          ansible_host: 10.99.0.101       # public IP during bootstrap; switch to overlay IP after
-          ansible_user: metrics
-          ansible_port: 22                # base_hardening switches to 5860 mid-play; no -e needed
-          service_name: metrics           # entry name in network.yml
-          member_public_ssh: false        # SSH via public IP during bootstrap; switch to false after
-          # After bootstrap, update to:
-          #   ansible_host: 10.99.0.101  (overlay IP)
           #   ansible_port: 5860
           #   member_public_ssh: false   # SSH only via wg0; emergency access via Hetzner console

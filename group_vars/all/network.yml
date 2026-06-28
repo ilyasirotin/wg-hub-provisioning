@@ -120,26 +120,16 @@ clients:
 # Workflow: edit here -> ansible-playbook playbooks/hub.yml
 #                     -> ansible-playbook playbooks/services.yml
 # ---------------------------------------------------------------------
-services:
-  - name: ha
-    ip: 10.99.0.100
-    dns_names: [ha]
-    nginx: true
-    nginx_upstream: 127.0.0.1:8123
-    ingress:                                                  # who may connect, and where
-      - { proto: tcp, port: 80, from: [users, sites, iot] }   # HTTP → HTTPS redirect
-      - { proto: tcp, port: 443, from: [users, sites, iot] }
-      - { proto: tcp, port: 5860, from: [users, sites, iot] } # SSH to HA
-      - { proto: tcp, port: 8883, from: [iot] }               # MQTT over TLS
-    egress:                                                   # flows the service may open itself
-      - { to: iot_subnets }
-
-  - name: metrics
-    ip: 10.99.0.101
-    dns_names: [metrics]
-    nginx: true
-    nginx_upstream: 127.0.0.1:443
-    ingress:                                                  # who may connect, and where
-      - { proto: tcp, port: 80, from: [users, sites] }        # HTTP → HTTPS redirect
-      - { proto: tcp, port: 443, from: [users, sites] }
-      - { proto: tcp, port: 5860, from: [users, sites] }      # SSH to Metrics
+services: {}
+  # - name: ha
+  #   ip: 10.99.0.100
+  #   dns_names: [ha]
+  #   nginx: true
+  #   nginx_upstream: 127.0.0.1:8123
+  #   ingress:                                                  # who may connect, and where
+  #     - { proto: tcp, port: 80, from: [users, sites, iot] }   # HTTP → HTTPS redirect
+  #     - { proto: tcp, port: 443, from: [users, sites, iot] }
+  #     - { proto: tcp, port: 5860, from: [users, sites, iot] } # SSH to HA
+  #     - { proto: tcp, port: 8883, from: [iot] }               # MQTT over TLS
+  #   egress:                                                   # flows the service may open itself
+  #     - { to: iot_subnets }
