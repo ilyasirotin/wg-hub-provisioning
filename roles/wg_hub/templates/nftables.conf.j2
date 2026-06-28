@@ -104,6 +104,11 @@ table inet filter {
 {% endfor %}
 {% endif %}
 
+{% if service_ips %}
+        # --- baseline for all services: ICMP from any overlay peer ---
+        iifname "{{ wg_interface }}" ip daddr @service_ips ip protocol icmp accept
+{% endif %}
+
 {% for svc in services %}
         # --- service: {{ svc.name }} ({{ svc.ip }}) ---
 {% for r in svc.ingress | default([]) %}

@@ -98,17 +98,49 @@ stays open to the internet.
 
 ## Adding a service
 
-1. Add to `services:` in network.yml (template in the file's comments).
-2. Add the host to `inventory.yml` -> `services.hosts`
-   (`ansible_host` = public IP on bootstrap, `service_name` = the entry).
-3. `ansible-playbook playbooks/hub.yml` (peer keys + ACL + DNS).
-4. `ansible-playbook playbooks/services.yml --limit <host>` (joins overlay,
-   pulls the cert, brings up nginx if `nginx: true`).
-5. Deploy the service itself listening on `nginx_upstream`. Verify
-   `https://<name>.in.threadnull.dev` from the VPN.
-6. Switch `ansible_host` to the wg address, set `member_public_ssh: false`,
-   re-run - the VPS no longer exists for the internet. Mirror this with an
-   empty inbound Hetzner Cloud Firewall.
+This is a two-phase process: bootstrap over the public IP, then lock down
+to overlay-only once the tunnel is verified.
+
+> **Invariant:** run `hub.yml` before `services.yml` whenever `network.yml`
+> changes. The hub's nftables forward rules are generated from `network.yml`;
+> skipping `hub.yml` leaves the hub dropping traffic to the new ports.
+
+### Phase 1 — Bootstrap (public IP)
+
+1. Add the service block under `services:` in `network.yml` (overlay IP,
+   `dns_names`, `ingress`/`egress`, `nginx`/`nginx_upstream` if needed).
+2. Add the host to `inventory.yml → services.hosts`:
+   - `ansible_host`: public IP (from Hetzner panel)
+   - `ansible_port: 5860` — base_hardening moves sshd from 22 → 5860
+     mid-play via a handler; do **not** use `-e ansible_port=22` (that
+     would override the hub port and break `delegate_to` tasks)
+   - `service_name`: the `name:` key from step 1
+   - Leave `member_public_ssh` absent/commented (defaults to `true`,
+     keeping bootstrap SSH open on all interfaces)
+3. `ansible-playbook playbooks/hub.yml --ask-vault-pass` — generates the
+   WireGuard keypair + PSK on the hub, adds the peer to `wg0.conf` via
+   `wg syncconf`, creates nftables forward rules for every declared
+   ingress/egress port, adds the DNS A record.
+4. `ansible-playbook playbooks/services.yml --limit <host> --ask-vault-pass -K`
+   — joins the overlay (WireGuard up), deploys the member nftables (bootstrap
+   SSH still open), syncs the wildcard cert from the hub, brings up nginx if
+   `nginx: true`. Deploy the backend service listening on `nginx_upstream`.
+   Verify `https://<name>.in.threadnull.dev` and SSH from the VPN.
+
+### Phase 2 — Lock down (overlay only)
+
+5. In `inventory.yml`, update the host entry:
+   - `ansible_host`: overlay IP (e.g. `10.99.0.100`)
+   - Uncomment `member_public_ssh: false`
+6. If `network.yml` was also updated (e.g. adding ingress ports while
+   verifying in Phase 1), run `hub.yml` first to push those changes to the
+   hub's nftables before the service VPS closes its public door:
+   `ansible-playbook playbooks/hub.yml --ask-vault-pass`
+7. `ansible-playbook playbooks/services.yml --limit <host> --ask-vault-pass -K`
+   — redeploys the member nftables with `member_public_ssh: false`, removing
+   the bootstrap `tcp dport 22/5860 accept` rules on all interfaces. SSH and
+   web traffic are now overlay-only. Mirror with an empty/deny-all Hetzner
+   Cloud Firewall on the VPS for belt-and-suspenders public closure.
 
 ## Access model (hub nftables)
 

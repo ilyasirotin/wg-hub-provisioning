@@ -1,5 +1,13 @@
 # Managed by Ansible. TLS reverse proxy for {{ vpn_member_svc.name }}.
 server {
+    listen {{ vpn_member_svc.ip }}:80;
+{% for name in vpn_member_svc.dns_names %}
+    server_name {{ name }}.{{ wg_domain }};
+{% endfor %}
+    return 301 https://$host$request_uri;
+}
+
+server {
     listen {{ vpn_member_svc.ip }}:443 ssl;
 {% for name in vpn_member_svc.dns_names %}
     server_name {{ name }}.{{ wg_domain }};

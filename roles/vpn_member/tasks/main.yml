@@ -156,6 +156,23 @@
     state: present
   when: vpn_member_svc.nginx | default(false)
 
+- name: Create nginx systemd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/nginx.service.d
+    state: directory
+    mode: "0755"
+  when: vpn_member_svc.nginx | default(false)
+
+- name: Make nginx wait for WireGuard before binding
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nginx.service.d/wg-wait.conf
+    mode: "0644"
+    content: |
+      [Unit]
+      After=wg-quick@{{ wg_interface }}.service
+  notify: Reload nginx
+  when: vpn_member_svc.nginx | default(false)
+
 - name: Allow www-data to read cert directory
   ansible.builtin.file:
     path: /etc/wg-certs
@@ -192,4 +209,5 @@
     name: nginx
     enabled: true
     state: started
+    daemon_reload: true
   when: vpn_member_svc.nginx | default(false)
