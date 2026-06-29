@@ -3,7 +3,7 @@ all:
     hub:
       hosts:
         vps-relay-01:
-          ansible_host: 65.21.177.182
+          ansible_host: 10.99.0.1
           ansible_user: wg
           ansible_port: 5860
           # First run on a fresh server (sshd still on 22):
