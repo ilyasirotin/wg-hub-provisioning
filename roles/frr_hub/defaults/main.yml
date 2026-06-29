@@ -1,0 +1,5 @@
+---
+# RFC 6996 private ASN range: 64512–65534.
+# Each site router that peers with the hub should use a distinct ASN
+# in the same range (e.g. site_a: 65011, site_b: 65012).
+frr_hub_asn: 65001

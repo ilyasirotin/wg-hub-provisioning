@@ -6,4 +6,5 @@
   roles:
     - base_hardening
     - wg_hub
+    - frr_hub
     - certs_hub

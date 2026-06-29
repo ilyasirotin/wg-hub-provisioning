@@ -82,6 +82,9 @@ table inet filter {
         iifname "{{ wg_interface }}" udp dport 53 accept
         iifname "{{ wg_interface }}" tcp dport 53 accept
 
+        # BGP - overlay peers only
+        iifname "{{ wg_interface }}" tcp dport 179 accept
+
         log prefix "nft_input_drop: " counter drop
     }
 
@@ -90,6 +93,9 @@ table inet filter {
 
         ct state established,related accept
         ct state invalid drop
+
+        # Clamp MSS to path MTU on SYN — prevents hangs over PPPoE / restrictive ISP links
+        tcp flags syn tcp option maxseg size set rt mtu
 
         # --- admin: full access (overlay, sites, internet via hub/home) ---
         iifname "{{ wg_interface }}" ip saddr @admin_ips accept

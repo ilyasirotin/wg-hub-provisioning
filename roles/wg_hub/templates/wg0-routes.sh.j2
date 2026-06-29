@@ -22,12 +22,8 @@ if [ "$ACTION" = up ]; then OP=add; else OP=del; fi
 # Overlay subnet
 route "$OP" {{ wg_network }} dev "$IFACE"
 
-# Site LAN routes
-{% for sid, s in sites.items() %}
-{% for subnet in s.subnets %}
-route "$OP" {{ subnet }} dev "$IFACE"
-{% endfor %}
-{% endfor %}
+# Site LAN routes are now managed by BGP via FRR (roles/frr_hub).
+# Routes installed dynamically: ip route show proto bgp
 
 # Table 123: default via the tunnel -> exit node (longest-prefix on peers)
 route "$OP" default dev "$IFACE" table 123

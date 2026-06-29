@@ -1,0 +1,47 @@
+! Managed by Ansible (roles/frr_hub). Do not edit by hand.
+! BGP scaffold for the WireGuard hub — hub ASN {{ frr_hub_asn }}.
+! Site routers peer over the overlay ({{ wg_network }}) using distinct
+! private ASNs and announce their LANs. Once peering is verified, remove
+! the matching static ip-route lines from wg0-routes.sh.j2.
+!
+frr defaults traditional
+hostname {{ inventory_hostname }}
+log syslog informational
+service integrated-vtysh-config
+!
+router bgp {{ frr_hub_asn }}
+ bgp router-id {{ hub.ip }}
+ bgp log-neighbor-changes
+ no bgp ebgp-requires-policy
+ !
+ ! Declare the peer-group before referencing it in bgp listen range.
+ neighbor OVERLAY peer-group
+ neighbor OVERLAY remote-as external
+ neighbor OVERLAY description "WireGuard overlay peers (sites)"
+ neighbor OVERLAY bfd
+ !
+ ! Accept BGP connections from any peer on the overlay without per-neighbor config.
+ bgp listen range {{ wg_network }} peer-group OVERLAY
+ !
+ address-family ipv4 unicast
+  ! Redistribute the overlay connected route so peers learn the hub prefix.
+  redistribute connected route-map ONLY-OVERLAY
+  neighbor OVERLAY activate
+  neighbor OVERLAY soft-reconfiguration inbound
+  neighbor OVERLAY prefix-list SITE-LANS in
+  neighbor OVERLAY prefix-list NOTHING out
+ exit-address-family
+!
+! Permit RFC 1918 site LAN prefixes up to /24; block everything else inbound.
+ip prefix-list SITE-LANS seq 5 permit 10.0.0.0/8 le 24
+ip prefix-list SITE-LANS seq 10 deny any
+!
+ip prefix-list NOTHING seq 5 deny any
+!
+! Outbound: only advertise the overlay subnet, not public or loopback addresses.
+ip prefix-list OVERLAY-ONLY seq 5 permit {{ wg_network }}
+ip prefix-list OVERLAY-ONLY seq 10 deny any
+!
+route-map ONLY-OVERLAY permit 10
+ match ip address prefix-list OVERLAY-ONLY
+!

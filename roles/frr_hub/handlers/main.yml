@@ -1,0 +1,6 @@
+---
+- name: Restart frr
+  ansible.builtin.systemd:
+    name: frr.service
+    state: restarted
+    daemon_reload: true

@@ -30,3 +30,8 @@
     name: dnsmasq
     state: restarted
     daemon_reload: true
+
+- name: Restart systemd-sysctl
+  ansible.builtin.systemd:
+    name: systemd-sysctl.service
+    state: restarted
