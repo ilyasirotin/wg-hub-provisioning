@@ -29,16 +29,20 @@ router bgp {{ frr_hub_asn }}
   neighbor OVERLAY activate
   neighbor OVERLAY soft-reconfiguration inbound
   neighbor OVERLAY prefix-list SITE-LANS in
-  neighbor OVERLAY prefix-list NOTHING out
+  ! Allow the hub to advertise the overlay subnet AND other sites' LAN routes.
+  neighbor OVERLAY prefix-list SAFE-OUT out
  exit-address-family
 !
-! Permit RFC 1918 site LAN prefixes up to /24; block everything else inbound.
+! INBOUND: Permit RFC 1918 site LAN prefixes up to /24; block everything else.
 ip prefix-list SITE-LANS seq 5 permit 10.0.0.0/8 le 24
 ip prefix-list SITE-LANS seq 10 deny any
 !
-ip prefix-list NOTHING seq 5 deny any
+! OUTBOUND TO PEERS: Advertise the overlay and site LANs, block public IPs.
+ip prefix-list SAFE-OUT seq 5 permit {{ wg_network }}
+ip prefix-list SAFE-OUT seq 10 permit 10.0.0.0/8 le 24
+ip prefix-list SAFE-OUT seq 15 deny any
 !
-! Outbound: only advertise the overlay subnet, not public or loopback addresses.
+! ROUTE-MAP FOR REDISTRIBUTE CONNECTED: Only redistribute the overlay subnet.
 ip prefix-list OVERLAY-ONLY seq 5 permit {{ wg_network }}
 ip prefix-list OVERLAY-ONLY seq 10 deny any
 !

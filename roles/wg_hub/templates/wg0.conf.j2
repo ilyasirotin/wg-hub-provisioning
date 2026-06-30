@@ -18,7 +18,7 @@ PresharedKey = {{ wg_hub_peer_data[peer.name]['psk'] }}
    win by longest-prefix match. #}
 AllowedIPs = 0.0.0.0/0
 {% elif peer.kind == 'site' %}
-AllowedIPs = {{ ([peer.ip ~ '/32'] + peer.subnets) | join(', ') }}
+AllowedIPs = {{ peer.ip }}/32, 10.{{ peer.number }}.0.0/16
 {% else %}
 AllowedIPs = {{ peer.ip }}/32
 {% endif %}
