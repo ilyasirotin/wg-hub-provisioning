@@ -66,7 +66,8 @@ graph TB
 | systemd unit | Role | Reloads on peer change |
 |---|---|---|
 | `wg-quick@wg0` | WireGuard interface + kernel peer table | No — `wg syncconf` used |
-| `wg0-routes.service` | Overlay/LAN routes + PBR table 123 | Yes — full restart |
+| `wg0-routes.service` | Overlay route + PBR table 123 (home egress) | Yes — full restart |
+| `frr.service` | FRRouting bgpd — dynamic site LAN routes via eBGP | No — BGP converges |
 | `nftables` | Stateful firewall | Yes — `systemctl reload` |
 | `dnsmasq` | Authoritative DNS for `in.threadnull.dev` | Yes — restart |
 | `lego-renew.timer` | Daily wildcard cert renewal via Cloudflare DNS-01 | N/A |
@@ -95,7 +96,7 @@ table.
 | Peer | AllowedIPs on hub |
 |---|---|
 | site_a (exit node) | `0.0.0.0/0` |
-| site_b | `10.99.0.12/32, 10.2.10.0/24, …` |
+| site_b | `10.99.0.12/32, 10.2.0.0/16` |
 | pixel_1o_pro | `10.99.0.20/32` |
 
 `0.0.0.0/0` on site_a does **not** mean all traffic goes to site_a. More-specific
@@ -158,13 +159,11 @@ peer and re-run `hub.yml`. The peer device must receive the new `.rsc` or `.conf
 # Overlay: all WireGuard peers are reachable via wg0
 ip route replace 10.99.0.0/24 dev wg0
 
-# Site LAN routes: traffic for site LANs exits via the tunnel (hub forwards to site)
-ip route replace 10.1.10.0/24 dev wg0   # site_a VLAN10
-ip route replace 10.1.20.0/24 dev wg0   # ... (all subnets from network.yml)
-ip route replace 10.2.10.0/24 dev wg0   # site_b VLAN10
-# ...
+# Site LAN routes are NOT managed here — bgpd (frr.service) installs them
+# dynamically via eBGP. Visible as: ip route show proto bgp
+# When a site's WireGuard session drops, BGP withdraws its routes automatically.
 
-# PBR table 123: default route for home-profile client internet
+# PBR table 123: default route for home-profile client internet egress
 ip route replace default dev wg0 table 123
 
 # Policy rules: home-profile clients use table 123
@@ -361,20 +360,26 @@ wg_hub role (tasks/main.yml):
   3. Slurp keys → wg_hub_peer_data / wg_hub_server_keys facts
   4. Render templates:
        wg0.conf              → /etc/wireguard/wg0.conf
-       wg0-routes.sh         → /usr/local/sbin/wg0-routes.sh
+       wg0-routes.sh         → /usr/local/sbin/wg0-routes.sh   (overlay + PBR only)
        nftables.conf         → /etc/nftables.conf
        dnsmasq-internal.conf → /etc/dnsmasq.d/wg-internal.conf
        client configs        → /etc/wireguard/clients/<name>.conf
-       MikroTik snippets     → /etc/wireguard/clients/<name>.rsc
+       MikroTik snippets     → /etc/wireguard/clients/<name>.rsc  (WG + BGP)
   5. Handlers (only if changed):
        wg syncconf           — peer table update, no restart
-       wg0-routes restart    — new route entries
+       wg0-routes restart    — route entries
        nftables reload       — new firewall sets (pre-validated with nft -c)
        dnsmasq restart       — new host records
+       systemd-sysctl restart — ip_forward drop-in applied
+
+frr_hub role (tasks/main.yml):
+  - Installs frr, enables bgpd
+  - Deploys /etc/frr/frr.conf: router bgp 65001, bgp listen range 10.99.0.0/24
+  - Site LAN routes arrive via eBGP — no static routes required
 ```
 
 **Playbooks**:
-- `hub.yml` → `base_hardening` + `wg_hub` + `certs_hub` (run this for all hub changes)
+- `hub.yml` → `base_hardening` + `wg_hub` + `frr_hub` + `certs_hub`
 - `services.yml` → `base_hardening` + `vpn_member` (run per service VPS, after hub.yml)
 
 ---
@@ -386,12 +391,16 @@ change (new device, key rotation) would require a full `wg-quick down/up`, dropp
 all active sessions. With `Table = off` and a separate `wg0-routes.service`,
 `wg syncconf` can update peers atomically with zero disruption.
 
-**Why sysctl.d/99-wg-hub.conf**: `ansible.posix.sysctl` without an explicit
-`sysctl_file` writes to `/etc/sysctl.conf`. On Debian, files in `/etc/sysctl.d/`
-are processed after `/etc/sysctl.conf`, so a distro default can override it on
-reboot. A `99-` prefix file loads last and wins any conflict. The `sysctl_set: true`
-parameter applies the value live during the Ansible run, masking the bug until the
-next reboot — which is why `ip_forward = 0` wasn't caught at deploy time.
+**Why sysctl.d/99-wg-hub.conf**: A `copy` task writes exactly one line to
+`/etc/sysctl.d/99-wg-hub.conf`. The `99-` prefix ensures it loads after all
+distro-supplied sysctl.d files and wins any conflicts. The handler restarts
+`systemd-sysctl.service` to apply the value immediately during the run.
+
+**Why BGP over static site LAN routes**: With static `ip route` entries in
+`wg0-routes.sh`, a site going down leaves its routes in the kernel — traffic
+is silently blackholed until a manual restart. With eBGP, when the WireGuard
+session drops the BGP hold-timer expires and bgpd withdraws the routes
+automatically. No stale routes, no manual intervention.
 
 **Why dnsmasq not on 127.0.0.1**: Clients query `10.99.0.1:53`. Binding on loopback
 would require NAT rules; binding on the overlay IP is cleaner and self-documenting —
@@ -414,14 +423,37 @@ Key rotation is an explicit action (delete the files, re-run).
 
 ```bash
 echo "=== ip_forward ===" && sysctl net.ipv4.ip_forward && \
-echo "=== Services ===" && systemctl is-active wg-quick@wg0 wg0-routes nftables dnsmasq && \
+echo "=== Services ===" && systemctl is-active wg-quick@wg0 wg0-routes nftables dnsmasq frr && \
 echo "=== WireGuard peers ===" && sudo wg show wg0 latest-handshakes && \
-echo "=== Routing ===" && ip route show | grep wg0 && ip rule show && \
+echo "=== BGP ===" && sudo vtysh -c "show bgp summary" && \
+echo "=== BGP routes ===" && ip route show proto bgp && \
+echo "=== Routing ===" && ip route show table 123 && ip rule show && \
 echo "=== DNS ===" && dig +short @10.99.0.1 hub.in.threadnull.dev
 ```
 
 Expected: `ip_forward = 1`, all services `active`, all peers with handshake < 120s,
-routes via `wg0`, at least one `ip rule`, DNS returns `10.99.0.1`.
+BGP `State/PfxRcd` shows `Established/1` per connected site, `ip route show proto bgp`
+lists `10.N.0.0/16` per site, DNS returns `10.99.0.1`.
+
+### FRR / BGP
+
+```bash
+# Session state: Up/Down, uptime, prefixes received
+sudo vtysh -c "show bgp summary"
+
+# All BGP routes received from sites
+sudo vtysh -c "show bgp ipv4 unicast"
+
+# Running FRR config (live, not frr.conf on disk)
+sudo vtysh -c "show running-config"
+
+# Site LAN routes installed in kernel (proto bgp = installed by bgpd)
+ip route show proto bgp
+
+# FRR service status and recent log
+systemctl status frr
+sudo journalctl -u frr -n 50 --no-pager
+```
 
 ---
 

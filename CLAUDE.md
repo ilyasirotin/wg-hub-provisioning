@@ -33,7 +33,7 @@ ansible-lint
 ansible-playbook playbooks/hub.yml --syntax-check
 ansible-playbook playbooks/hub.yml --check --diff --ask-vault-pass
 
-# Apply the hub (relay + firewall + DNS + certs)
+# Apply the hub (relay + firewall + DNS + BGP + certs)
 ansible-playbook playbooks/hub.yml --ask-vault-pass
 
 # Apply one service VPS
@@ -53,9 +53,9 @@ of the role; pipelining keeps the session alive through the restart.
 
 ## Architecture
 
-Two playbooks, four roles, both playbooks start with `base_hardening`:
+Two playbooks, five roles, both playbooks start with `base_hardening`:
 
-- `playbooks/hub.yml` → `base_hardening` → `wg_hub` → `certs_hub`
+- `playbooks/hub.yml` → `base_hardening` → `wg_hub` → `frr_hub` → `certs_hub`
 - `playbooks/services.yml` → `base_hardening` → `vpn_member`
 
 **The model → render pipeline (`roles/wg_hub`) is the core.** Read
@@ -73,11 +73,23 @@ Two playbooks, four roles, both playbooks start with `base_hardening`:
    split so peer edits don't restart the tunnel:
    - `wg0.conf.j2` — interface + peers **only** (no PostUp firewall/routes).
      Applied via the `Sync WireGuard peers` handler using `wg syncconf`.
-   - `wg0-routes.sh.j2` + a systemd unit bound to `wg-quick@wg0` — overlay/site
-     routes and the policy-based routing (PBR table 123) that sends
-     `profile: home` clients' internet egress out the `exit_node` site router.
+     Non-exit-node sites use `AllowedIPs = <overlay-ip>/32, 10.<N>.0.0/16`
+     (supernet for WireGuard peer selection; actual LAN routes come from BGP).
+   - `wg0-routes.sh.j2` + a systemd unit bound to `wg-quick@wg0` — overlay
+     subnet (`10.99.0.0/24`) and the policy-based routing (PBR table 123) that
+     sends `profile: home` clients' internet egress out the `exit_node` site
+     router. **Site LAN routes are NOT here** — they are managed by `frr_hub`.
    - `nftables.conf.j2` — all access control. Validated with `nft -c` before
-     deploy.
+     deploy. Forward chain includes MSS clamping (`tcp flags syn tcp option
+     maxseg size set rt mtu`). Input chain allows TCP 179 from overlay
+     (`iifname "wg0" tcp dport 179 accept`) for BGP peering.
+
+**`roles/frr_hub`** — FRRouting BGP daemon on the hub. Installs `frr`, enables
+`bgpd`, deploys `/etc/frr/frr.conf`. The config uses `bgp listen range
+10.99.0.0/24 peer-group OVERLAY` so new sites connect automatically (hub ASN
+65001, site ASNs 65011/65012/…). Site LAN routes arrive via eBGP and are
+installed with `proto bgp`. When a WireGuard session drops, the BGP hold-timer
+expires and routes are withdrawn — no stale routes.
 
 **nftables zoning is generated from group membership.** `nftables.conf.j2`
 builds named sets (`admin_ips`, `user_ips`, `service_ips`, per-site `*_nets`,
@@ -88,11 +100,17 @@ group names (`users`, `sites`, `iot`, `services`), a site id, or another
 service name. When changing access rules, edit `network.yml` and re-render —
 do not hand-edit rendered output.
 
+**sysctl:** IPv4 forwarding is set via `ansible.builtin.copy` to
+`/etc/sysctl.d/99-wg-hub.conf` (a single `net.ipv4.ip_forward = 1` line).
+The `99-` prefix ensures it loads last and wins over distro defaults. A
+`Restart systemd-sysctl` handler applies it immediately during the run.
+
 **DNS:** `dnsmasq` on the hub binds only the overlay IP and serves the internal
 zone, forwarding other queries to `dns_upstreams`. The hub's *own* resolver is
 deliberately decoupled — `/etc/resolv.conf` is pinned to `hub_resolvers` and
 made immutable (`chattr +i`) so the hub can always resolve ACME/apt even before
-any site peer is up.
+any site peer is up. The dnsmasq systemd drop-in uses only `After=wg-quick@wg0`
+(no `Wants=`) to avoid a stop-ordering cycle on shutdown.
 
 **Certificates (`certs_hub`):** `lego` on the hub gets a wildcard
 `*.in.threadnull.dev` via Cloudflare DNS-01 (token only on the hub), renewed by
@@ -108,9 +126,11 @@ it on the hub via `delegate_to`).
   and the nftables set-building loops consume the model.
 - Tasks that touch keys/configs use `no_log: true`; preserve that.
 - `*.priv`, `*.psk`, vault plaintext, and `rendered/` are gitignored.
-- Address-plan invariants (site N → router `10.99.0.1N`, LAN `10.N.<vlan>.0/24`,
-  `99` reserved for the overlay) are load-bearing for readability and for the
-  generated sets — follow them.
+- Address-plan invariants (site N → router `10.99.0.1N`, LAN supernet
+  `10.N.0.0/16`, VLANs as `10.N.<vlan>.0/24`, `99` reserved for the overlay)
+  are load-bearing for readability and for the generated sets — follow them.
+- Site LAN routes live in BGP, not in `wg0-routes.sh`. Add routes by adding
+  subnets to the MikroTik `BGP-EXPORT` address list, not by editing the script.
 
 `routeros/site_a_backup.rsc` / `routeros/site_b_backup.rsc` at the repo root are full MikroTik
 router config exports kept for reference, not rendered artifacts.

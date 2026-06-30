@@ -31,10 +31,11 @@ third/fourth/fifth house is a copy-paste of a site block with a new number.
 group_vars/all/network.yml    # the model: peers, groups, ingress/egress
 group_vars/all/settings.yml   # operational settings
 group_vars/all/vault.yml      # secrets (ansible-vault), see *.example
-playbooks/hub.yml             # hub: bare relay (WG + nftables + dnsmasq + certs)
+playbooks/hub.yml             # hub: bare relay (WG + nftables + dnsmasq + certs + BGP)
 playbooks/services.yml        # service VPSes (vpn_member role)
 roles/base_hardening          # ssh, fail2ban, unattended-upgrades
 roles/wg_hub                  # wg0/nftables/routes/DNS + MikroTik snippets
+roles/frr_hub                 # FRRouting (bgpd): dynamic LAN routing via eBGP
 roles/certs_hub               # wildcard cert + read-only publication
 roles/vpn_member              # service VPS: WG, firewall, cert-sync, nginx
 ```
@@ -82,11 +83,12 @@ stays open to the internet.
 
 1. Copy a block under `sites:` in network.yml, pick the next `number` and
    `ip` (`10.99.0.1N`), list its LAN subnets as `10.N.<vlan>.0/24`.
-2. `ansible-playbook playbooks/hub.yml` - generates the peer, ACLs, DNS,
+2. `ansible-playbook playbooks/hub.yml` — generates the peer, ACLs, DNS,
    and `/etc/wireguard/clients/<site>.rsc` on the hub.
-3. On the new router: generate its own WG keypair, paste the rendered
-   `.rsc` (insert the router private key, copy the router public key back
-   into a note), confirm the handshake.
+3. On the new router: paste the rendered `.rsc` in the MikroTik terminal.
+   The snippet configures WireGuard **and** eBGP in one pass — the hub
+   learns the site's LAN supernet (`10.N.0.0/16`) via BGP automatically.
+   Confirm the handshake and check `vtysh -c "show bgp summary"` on the hub.
 
 ## Adding a personal client (family)
 
@@ -166,6 +168,10 @@ Cloudflare token lives only on the hub. Service VPSes pull a read-only copy from
 
 - Peer changes apply via `wg syncconf` (no tunnel restart). Changing
   `ListenPort`/`Address` needs `systemctl restart wg-quick@wg0`.
+- Site LAN routes (`10.N.0.0/16`) are installed on the hub dynamically
+  via eBGP (FRRouting). When a site tunnel drops, BGP withdraws its routes
+  automatically — no blackholing. `wg0-routes.sh` only handles the overlay
+  subnet and PBR table 123 (home-profile internet egress).
 - Single point of failure is the hub by design (NAT/dynamic-IP routers
   cannot peer directly). If the hub dies, sites keep their own WAN; only
   cross-site and service access pause until it returns.

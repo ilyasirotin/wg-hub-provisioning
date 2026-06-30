@@ -228,10 +228,12 @@ PresharedKey = ${SITE_A_PSK}
 AllowedIPs = 0.0.0.0/0
 
 # site: site_b - House B - remote
+# AllowedIPs: overlay IP + /16 supernet (WireGuard peer selection only;
+# actual LAN routes are installed by bgpd via eBGP, not wg-quick)
 [Peer]
 PublicKey = ${SITE_B_PUB}
 PresharedKey = ${SITE_B_PSK}
-AllowedIPs = 10.99.0.12/32, 10.2.10.0/24, 10.2.20.0/24, 10.2.30.0/24, 10.2.40.0/24, 10.2.100.0/24
+AllowedIPs = 10.99.0.12/32, 10.2.0.0/16
 
 # client: pixel_10_pro_home
 [Peer]
@@ -285,18 +287,9 @@ if [ "$ACTION" = up ]; then OP=add; else OP=del; fi
 # Overlay-подсеть
 route "$OP" 10.99.0.0/24 dev "$IFACE"
 
-# Маршруты до LAN site_a
-route "$OP" 10.1.10.0/24 dev "$IFACE"
-route "$OP" 10.1.20.0/24 dev "$IFACE"
-route "$OP" 10.1.30.0/24 dev "$IFACE"
-route "$OP" 10.1.40.0/24 dev "$IFACE"
-
-# Маршруты до LAN site_b
-route "$OP" 10.2.10.0/24 dev "$IFACE"
-route "$OP" 10.2.20.0/24 dev "$IFACE"
-route "$OP" 10.2.30.0/24 dev "$IFACE"
-route "$OP" 10.2.40.0/24 dev "$IFACE"
-route "$OP" 10.2.100.0/24 dev "$IFACE"
+# LAN-маршруты сайтов управляются bgpd (frr.service) через eBGP, не здесь.
+# При падении WireGuard-сессии сайта BGP автоматически отзывает его маршруты.
+# Просмотр: ip route show proto bgp
 
 # Таблица 123: дефолтный маршрут через туннель -> exit node (site_a).
 # Выигрывает по правилу ip rule, а не по длине префикса в main.
@@ -428,6 +421,9 @@ table inet filter {
         iifname "wg0" udp dport 53 accept
         iifname "wg0" tcp dport 53 accept
 
+        # BGP — только через overlay (для eBGP-сессий с роутерами сайтов)
+        iifname "wg0" tcp dport 179 accept
+
         log prefix "nft_input_drop: " counter drop
     }
 
@@ -436,6 +432,9 @@ table inet filter {
 
         ct state established,related accept
         ct state invalid drop
+
+        # MSS clamping — предотвращает зависание сессий через PPPoE/VPN
+        tcp flags syn tcp option maxseg size set rt mtu
 
         # admin: полный доступ
         iifname "wg0" ip saddr @admin_ips accept
@@ -510,8 +509,10 @@ sudo tee /etc/systemd/system/dnsmasq.service.d/wg-ordering.conf << 'EOF'
 [Unit]
 Before=
 After=wg-quick@wg0.service
-Wants=wg-quick@wg0.service
 EOF
+# Примечание: Wants= намеренно не указывается — это создаёт цикл stop-зависимостей
+# (nss-lookup.target → dnsmasq → wg-quick@wg0 → network → nss-lookup.target)
+# и мешает корректной остановке wg0 при перезагрузке.
 ```
 
 **Конфиг внутренней зоны:**
@@ -594,24 +595,26 @@ sudo qrencode -t ansiutf8 < /etc/wireguard/clients/pixel_10_pro_cloud.conf
 ### 2.13 MikroTik-сниппет для site_a
 
 Команды вставляются в терминал роутера (Winbox или SSH). Ключи уже содержат
-конкретные значения — никаких плейсхолдеров.
+конкретные значения — никаких плейсхолдеров. Сниппет настраивает WireGuard
+**и** eBGP за один проход.
 
-```bash
-sudo tee /etc/wireguard/clients/site_a.rsc << EOF
-# WireGuard-конфиг для site_a (House A - primary).
-# Вставить в терминал MikroTik. Запускать в Safe Mode при удалённом доступе.
+Сниппет генерируется автоматически при `ansible-playbook playbooks/hub.yml`
+и сохраняется в `/etc/wireguard/clients/site_a.rsc` на хабе.
+
+```
+# ── WireGuard ────────────────────────────────────────────────────────────────
 
 # 1. Приватный ключ роутера (сгенерирован хабом)
-/interface wireguard set [find name=wg-client] private-key="$(sudo cat /etc/wireguard/clients/site_a.priv)"
+/interface wireguard set [find name=wg-client] private-key="<KEY>"
 
-# 2. Peer — хаб
+# 2. Peer — хаб (allowed-address: оверлей + /16 суперсеть site_b)
 /interface wireguard peers remove [find interface=wg-client]
-/interface wireguard peers add interface=wg-client \\
-    public-key="${SERVER_PUB}" \\
-    preshared-key="$(sudo cat /etc/wireguard/clients/site_a.psk)" \\
-    endpoint-address=65.21.177.182 endpoint-port=51820 \\
-    persistent-keepalive=25s \\
-    allowed-address=10.99.0.0/24,10.2.10.0/24,10.2.20.0/24,10.2.30.0/24,10.2.40.0/24,10.2.100.0/24
+/interface wireguard peers add interface=wg-client \
+    public-key="<HUB_PUB>" \
+    preshared-key="<PSK>" \
+    endpoint-address=65.21.177.182 endpoint-port=51820 \
+    persistent-keepalive=25s \
+    allowed-address=10.99.0.0/24,10.2.0.0/16
 
 # 3. IP на overlay-интерфейсе
 /ip address set [find interface=wg-client] address=10.99.0.11/24 network=10.99.0.0
@@ -619,15 +622,36 @@ sudo tee /etc/wireguard/clients/site_a.rsc << EOF
 # 4. Форвардинг *.in.threadnull.dev -> хаб
 /ip dns static remove [find type=FWD name="in.threadnull.dev"]
 /ip dns static add type=FWD name="in.threadnull.dev" forward-to=10.99.0.1
-EOF
-sudo chmod 600 /etc/wireguard/clients/site_a.rsc
+
+# ── BGP (eBGP к хабу, анонсирует суперсеть LAN этого сайта) ─────────────────
+
+# 5. Router ID привязан к overlay IP
+/routing id add name=wg-bgp-id id=10.99.0.11
+
+# 6. BGP инстанс (ASN 65011 = 65010 + номер сайта 1)
+/routing bgp instance add name=wg-bgp-inst as=65011 router-id=wg-bgp-id
+
+# 7. Список подсетей для анонса хабу
+/ip firewall address-list add list=BGP-EXPORT address=10.1.0.0/16
+
+# 8. BGP соединение с хабом
+/routing bgp connection add name=wg-hub \
+    instance=wg-bgp-inst \
+    local.address=10.99.0.11 \
+    local.role=ebgp \
+    remote.address=10.99.0.1 \
+    remote.as=65001 \
+    output.network=BGP-EXPORT \
+    connect=yes \
+    listen=yes
+
+# 9. Blackhole-анкор — BGP анонсирует только те префиксы, что есть в таблице.
+#    Реальный трафик никогда не дропается: /24 VLAN-маршруты более специфичны.
+/ip route add dst-address=10.1.0.0/16 blackhole comment="BGP advertisement anchor"
 ```
 
-Аналогично для `site_b` — поменять `site_a` → `site_b`, IP `10.99.0.11` → `10.99.0.12`,
-и AllowedIPs берутся из LAN site_a вместо site_b:
-```
-allowed-address=10.99.0.0/24,10.1.10.0/24,10.1.20.0/24,10.1.30.0/24,10.1.40.0/24
-```
+Для `site_b` структура идентична: ASN=65012, IP=10.99.0.12, address=10.2.0.0/16,
+allowed-address в WireGuard-пире = `10.99.0.0/24,10.1.0.0/16`.
 
 ### 2.14 Запуск всех сервисов
 
@@ -646,6 +670,87 @@ sudo systemctl restart nftables
 
 # dnsmasq (стартует после wg0 согласно drop-in)
 sudo systemctl enable --now dnsmasq
+
+# frr (BGP — динамические LAN-маршруты сайтов, стартует после wg0)
+sudo systemctl enable --now frr
+```
+
+### 2.15 FRRouting / BGP (роль `frr_hub`)
+
+Хаб устанавливает eBGP-сессии с роутерами сайтов через WireGuard-оверлей. LAN-маршруты
+сайтов (`10.N.0.0/16`) устанавливаются динамически — при падении туннеля маршруты
+отзываются автоматически.
+
+```bash
+sudo apt install -y frr
+```
+
+Включить bgpd (все остальные демоны оставить выключенными):
+
+```bash
+sudo tee /etc/frr/daemons.conf << 'EOF'
+bgpd=yes
+ospfd=no
+ospf6d=no
+ripd=no
+ripngd=no
+isisd=no
+pimd=no
+ldpd=no
+nhrpd=no
+eigrpd=no
+babeld=no
+sharpd=no
+pbrd=no
+bfdd=yes
+fabricd=no
+vrrpd=no
+EOF
+```
+
+Конфигурация BGP (hub ASN 65001, слушать весь оверлей):
+
+```bash
+sudo tee /etc/frr/frr.conf << 'EOF'
+! Managed by Ansible (roles/frr_hub). Do not edit by hand.
+frr defaults traditional
+hostname hub
+log syslog informational
+service integrated-vtysh-config
+!
+router bgp 65001
+ bgp router-id 10.99.0.1
+ bgp log-neighbor-changes
+ no bgp ebgp-requires-policy
+ !
+ neighbor OVERLAY peer-group
+ neighbor OVERLAY remote-as external
+ neighbor OVERLAY description "WireGuard overlay peers (sites)"
+ neighbor OVERLAY bfd
+ !
+ bgp listen range 10.99.0.0/24 peer-group OVERLAY
+ !
+ address-family ipv4 unicast
+  redistribute connected route-map ONLY-OVERLAY
+  neighbor OVERLAY activate
+  neighbor OVERLAY soft-reconfiguration inbound
+  neighbor OVERLAY prefix-list SITE-LANS in
+  neighbor OVERLAY prefix-list NOTHING out
+ exit-address-family
+!
+ip prefix-list SITE-LANS seq 5 permit 10.0.0.0/8 le 24
+ip prefix-list SITE-LANS seq 10 deny any
+!
+ip prefix-list NOTHING seq 5 deny any
+!
+ip prefix-list OVERLAY-ONLY seq 5 permit 10.99.0.0/24
+ip prefix-list OVERLAY-ONLY seq 10 deny any
+!
+route-map ONLY-OVERLAY permit 10
+ match ip address prefix-list OVERLAY-ONLY
+!
+EOF
+sudo systemctl enable --now frr
 ```
 
 ---
@@ -790,20 +895,30 @@ sudo systemctl enable --now lego-renew.timer
 ### Состояние сервисов
 
 ```bash
-sudo systemctl status wg-quick@wg0 wg0-routes nftables dnsmasq lego-renew.timer
+sudo systemctl status wg-quick@wg0 wg0-routes nftables dnsmasq frr lego-renew.timer
 ```
 
 ### WireGuard
 
 ```bash
 sudo wg show
-# Ожидаем: интерфейс wg0 поднят, видны peer-записи для всех 4 пиров
+# Ожидаем: интерфейс wg0 поднят, видны peer-записи для всех пиров
+```
+
+### BGP
+
+```bash
+sudo vtysh -c "show bgp summary"
+# Ожидаем: State=Established для каждого подключённого сайта, PfxRcvd=1
+
+ip route show proto bgp
+# Ожидаем: 10.1.0.0/16 via 10.99.0.11 dev wg0 (и 10.2.0.0/16 при наличии site_b)
 ```
 
 ### Маршруты
 
 ```bash
-ip route show | grep wg0       # overlay и LAN-маршруты
+ip route show dev wg0          # overlay + маршруты BGP-суперсетей сайтов
 ip route show table 123        # default через wg0 (PBR для home-профиля)
 ip rule show                   # правило: from 10.99.0.20/32 table 123
 ```
@@ -860,6 +975,12 @@ sudo systemctl reload nftables
 
 ## Добавление нового пира (краткая схема)
 
+**Через Ansible (рекомендуется):**
+1. Добавить блок в `group_vars/all/network.yml` (site/client/service).
+2. `ansible-playbook playbooks/hub.yml --ask-vault-pass` — генерирует ключи, обновляет `wg0.conf` через `wg syncconf`, ACL, DNS.
+3. Для нового **сайта**: скопировать `/etc/wireguard/clients/<name>.rsc` с хаба, вставить в терминал MikroTik. Сниппет настроит WireGuard **и** BGP. Проверить: `vtysh -c "show bgp summary"`.
+
+**Вручную (без Ansible):**
 1. Сгенерировать ключи: `wg genkey | tee /etc/wireguard/clients/<name>.priv | wg pubkey > /etc/wireguard/clients/<name>.pub && wg genpsk > /etc/wireguard/clients/<name>.psk`
 2. Добавить `[Peer]`-блок в `/etc/wireguard/wg0.conf`
 3. Применить без рестарта туннеля: `sudo wg syncconf wg0 <(sudo wg-quick strip /etc/wireguard/wg0.conf)`

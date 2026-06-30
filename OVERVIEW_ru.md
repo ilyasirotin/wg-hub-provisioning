@@ -67,7 +67,8 @@ graph TB
 | systemd unit | Роль | Перезагружается при изменении пиров |
 |---|---|---|
 | `wg-quick@wg0` | WireGuard-интерфейс + таблица пиров в ядре | Нет — используется `wg syncconf` |
-| `wg0-routes.service` | Маршруты оверлея/LAN + PBR table 123 | Да — полный рестарт |
+| `wg0-routes.service` | Маршрут оверлея + PBR table 123 (интернет для home) | Да — полный рестарт |
+| `frr.service` | FRRouting bgpd — динамические LAN-маршруты сайтов через eBGP | Нет — BGP сходится сам |
 | `nftables` | Stateful-файрвол | Да — `systemctl reload` |
 | `dnsmasq` | Авторитетный DNS для `in.threadnull.dev` | Да — рестарт |
 | `lego-renew.timer` | Ежедневное обновление wildcard-сертификата через Cloudflare DNS-01 | Н/П |
@@ -96,7 +97,7 @@ WireGuard выбирает, к какому пиру зашифровать па
 | Пир | AllowedIPs на хабе |
 |---|---|
 | site_a (exit node) | `0.0.0.0/0` |
-| site_b | `10.99.0.12/32, 10.2.10.0/24, …` |
+| site_b | `10.99.0.12/32, 10.2.0.0/16` |
 | pixel_1o_pro | `10.99.0.20/32` |
 
 `0.0.0.0/0` у site_a **не означает**, что весь трафик идёт к нему. Более специфичные
@@ -161,11 +162,9 @@ wg syncconf wg0 <(wg-quick strip /etc/wireguard/wg0.conf)
 # Оверлей: все WireGuard-пиры доступны через wg0
 ip route replace 10.99.0.0/24 dev wg0
 
-# Маршруты LAN сайтов: трафик к LAN выходит через тоннель (хаб форвардит к сайту)
-ip route replace 10.1.10.0/24 dev wg0   # site_a VLAN10
-ip route replace 10.1.20.0/24 dev wg0   # ... (все подсети из network.yml)
-ip route replace 10.2.10.0/24 dev wg0   # site_b VLAN10
-# ...
+# LAN-маршруты сайтов НЕ управляются здесь — bgpd (frr.service) устанавливает
+# их динамически через eBGP. Просмотр: ip route show proto bgp
+# При падении WireGuard-сессии сайта BGP автоматически отзывает его маршруты.
 
 # PBR table 123: маршрут по умолчанию для home-profile клиентов
 ip route replace default dev wg0 table 123
@@ -366,20 +365,26 @@ wg_hub role (tasks/main.yml):
   3. Slurp ключей → facts wg_hub_peer_data / wg_hub_server_keys
   4. Рендерит шаблоны:
        wg0.conf              → /etc/wireguard/wg0.conf
-       wg0-routes.sh         → /usr/local/sbin/wg0-routes.sh
+       wg0-routes.sh         → /usr/local/sbin/wg0-routes.sh   (оверлей + PBR)
        nftables.conf         → /etc/nftables.conf
        dnsmasq-internal.conf → /etc/dnsmasq.d/wg-internal.conf
        client configs        → /etc/wireguard/clients/<name>.conf
-       MikroTik snippets     → /etc/wireguard/clients/<name>.rsc
+       MikroTik snippets     → /etc/wireguard/clients/<name>.rsc  (WG + BGP)
   5. Хендлеры (только при изменениях):
        wg syncconf           — обновление таблицы пиров, без рестарта
-       wg0-routes restart    — новые записи маршрутов
+       wg0-routes restart    — маршруты
        nftables reload       — новые sets файрвола (предварительная валидация nft -c)
        dnsmasq restart       — новые host-записи
+       systemd-sysctl restart — применение ip_forward drop-in
+
+frr_hub role (tasks/main.yml):
+  - Устанавливает frr, включает bgpd
+  - Деплоит /etc/frr/frr.conf: router bgp 65001, bgp listen range 10.99.0.0/24
+  - LAN-маршруты сайтов поступают через eBGP — статические маршруты не нужны
 ```
 
 **Playbooks**:
-- `hub.yml` → `base_hardening` + `wg_hub` + `certs_hub` (запускать для всех изменений хаба)
+- `hub.yml` → `base_hardening` + `wg_hub` + `frr_hub` + `certs_hub`
 - `services.yml` → `base_hardening` + `vpn_member` (запускать для каждого сервисного VPS, после hub.yml)
 
 ---
@@ -391,12 +396,15 @@ PostUp/PreDown, любое изменение пиров (новое устро�
 полного `wg-quick down/up`, сбрасывая все активные сессии. С `Table = off` и отдельным
 `wg0-routes.service` команда `wg syncconf` обновляет пиров атомарно без разрывов.
 
-**Почему sysctl.d/99-wg-hub.conf**: `ansible.posix.sysctl` без явного `sysctl_file`
-пишет в `/etc/sysctl.conf`. На Debian файлы из `/etc/sysctl.d/` обрабатываются после
-`/etc/sysctl.conf`, и системный default может переопределить значение при ребуте.
-Файл с префиксом `99-` загружается последним и выигрывает любой конфликт. Параметр
-`sysctl_set: true` применяет значение сразу во время запуска Ansible, маскируя баг до
-следующего ребута — именно поэтому `ip_forward = 0` не был замечен при деплое.
+**Почему sysctl.d/99-wg-hub.conf**: Задача `copy` записывает ровно одну строку в
+`/etc/sysctl.d/99-wg-hub.conf`. Префикс `99-` гарантирует загрузку позже всех системных
+файлов sysctl.d и победу при конфликтах. Хендлер перезапускает `systemd-sysctl.service`
+для немедленного применения значения во время Ansible-прогона.
+
+**Почему BGP вместо статических LAN-маршрутов сайтов**: При статических `ip route` в
+`wg0-routes.sh` падение сайта оставляет его маршруты в ядре — трафик молча дропается до
+ручного перезапуска. С eBGP при падении WireGuard-сессии истекает BGP hold-timer и bgpd
+автоматически отзывает маршруты. Нет зависших маршрутов, нет ручного вмешательства.
 
 **Почему dnsmasq не на 127.0.0.1**: Клиенты обращаются к `10.99.0.1:53`. Привязка
 на loopback потребовала бы NAT-правил; привязка на overlay IP чище и самодокументирована
@@ -420,15 +428,38 @@ Ansible заменяет live-конфиг. Плохое изменение ша
 
 ```bash
 echo "=== ip_forward ===" && sysctl net.ipv4.ip_forward && \
-echo "=== Services ===" && systemctl is-active wg-quick@wg0 wg0-routes nftables dnsmasq && \
+echo "=== Services ===" && systemctl is-active wg-quick@wg0 wg0-routes nftables dnsmasq frr && \
 echo "=== WireGuard peers ===" && sudo wg show wg0 latest-handshakes && \
-echo "=== Routing ===" && ip route show | grep wg0 && ip rule show && \
+echo "=== BGP ===" && sudo vtysh -c "show bgp summary" && \
+echo "=== BGP routes ===" && ip route show proto bgp && \
+echo "=== Routing ===" && ip route show table 123 && ip rule show && \
 echo "=== DNS ===" && dig +short @10.99.0.1 hub.in.threadnull.dev
 ```
 
 Ожидаемый результат: `ip_forward = 1`, все сервисы `active`, все пиры с handshake
-< 120 сек, маршруты через `wg0`, хотя бы одно правило `ip rule`, DNS возвращает
-`10.99.0.1`.
+< 120 сек, BGP `State/PfxRcd` показывает `Established/1` для каждого подключённого
+сайта, `ip route show proto bgp` содержит `10.N.0.0/16` для каждого сайта, DNS
+возвращает `10.99.0.1`.
+
+### FRR / BGP
+
+```bash
+# Состояние сессий: Up/Down, uptime, количество принятых префиксов
+sudo vtysh -c "show bgp summary"
+
+# Все BGP-маршруты, полученные от сайтов
+sudo vtysh -c "show bgp ipv4 unicast"
+
+# Текущая конфигурация FRR (живая, не frr.conf на диске)
+sudo vtysh -c "show running-config"
+
+# LAN-маршруты сайтов в таблице ядра (proto bgp = установлено bgpd)
+ip route show proto bgp
+
+# Статус сервиса FRR и последние логи
+systemctl status frr
+sudo journalctl -u frr -n 50 --no-pager
+```
 
 ---
 
