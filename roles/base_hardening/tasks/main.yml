@@ -19,7 +19,6 @@
       - qrencode
       - rsync
       - curl
-      - python3-pexpect
     state: present
 
 - name: Remove ufw if present (conflicts with raw nftables)

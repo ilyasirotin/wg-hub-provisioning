@@ -31,13 +31,6 @@ route "$OP" {{ wg_network }} dev "$IFACE"
 # ICMP unreachable instead of leaking out of the hub's own uplink.
 route "$OP" unreachable default table {{ wg_pbr_table }} metric 4294967294
 
-if [ "$ACTION" = up ]; then
-  # Migration hygiene: drop the legacy static default (scope link, no via)
-  # left by older revisions of this script. Never matches the FRR-installed
-  # route (scope global, via <site router>).
-  ip route del default scope link dev "$IFACE" table {{ wg_pbr_table }} 2>/dev/null || true
-fi
-
 {% for c in clients if c.profile | default('cloud') == 'home' %}
 # home profile: {{ c.name }} egresses through the elected exit site
 rule "$OP" from {{ c.ip }}/32 table {{ wg_pbr_table }}

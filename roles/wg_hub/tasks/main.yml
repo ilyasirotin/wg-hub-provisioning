@@ -171,7 +171,9 @@
 # best default from exit sites, and wg-exit-sync polls the election and
 # programs both the table-{{ wg_pbr_table }} default route and the elected
 # peer's 0.0.0.0/0 AllowedIPs. Fail-closed when no exit site announces a
-# default.
+# default. On a fresh install the daemon starts before FRR is installed
+# (frr_hub runs after this role) — vtysh errors are silenced and the
+# daemon just stays fail-closed until bgpd is up; no ordering fix needed.
 - name: Deploy exit peer map (BGP nexthop -> WireGuard pubkey)
   ansible.builtin.template:
     src: exit-peers.map.j2

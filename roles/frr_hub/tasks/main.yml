@@ -1,14 +1,10 @@
 ---
-# BGP scaffold for the WireGuard hub.
-# This role installs FRR and wires up bgpd but does NOT replace the static
-# routes in wg0-routes.sh. That migration is a separate operational step:
-# 1. Apply this role.
-# 2. Configure BGP peering on each site router (distinct private ASN).
-# 3. Verify routes appear via `vtysh -c "show bgp ipv4 unicast"`.
-# 4. Remove the matching static ip-route lines from wg0-routes.sh.j2.
-#
-# To wire this role in: add `frr_hub` to the role list in playbooks/hub.yml
-# after `wg_hub`.
+# FRRouting BGP on the hub: dynamic site LAN routes + exit-default election.
+# Site routers peer over the overlay (bgp listen range — no per-site config
+# here); exit-capable sites announce 0.0.0.0/0, elected by local-pref in
+# frr.conf.j2. wg-exit-sync (roles/wg_hub) consumes the election result.
+# Runs after wg_hub in playbooks/hub.yml — on a fresh install wg-exit-sync
+# starts before FRR exists and simply stays fail-closed until bgpd is up.
 
 - name: Install frr
   ansible.builtin.apt:

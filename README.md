@@ -63,10 +63,19 @@ ansible-vault encrypt group_vars/all/vault.yml
 
 ## First run
 
-sshd on a fresh server still listens on 22; the run moves it to 5860.
+Preconditions on a fresh server:
+- the `wg` user exists with your key and passwordless sudo
+  (INSTALLATION.md step 0; run once as root);
+- `hub_public_ssh: true` in `group_vars/all/settings.yml` (public SSH stays
+  open until the overlay works);
+- cloud-init/apt has settled: `cloud-init status --wait`.
+
+sshd still listens on 22 and the inventory points at the overlay IP, so
+both are overridden once; the run moves sshd to 5860.
 
 ```bash
-ansible-playbook playbooks/hub.yml -e ansible_port=22 --ask-vault-pass
+ansible-playbook playbooks/hub.yml \
+  -e ansible_host=<hub-public-ip> -e ansible_port=22 --ask-vault-pass
 ```
 
 Verify:
@@ -74,10 +83,43 @@ Verify:
 - mobile_cloud reaches the internet with the VPS IP; mobile_home with the
   home IP;
 - `dig hub.in.threadnull.dev @10.99.0.1` answers from the zone;
+- `ip route show table 123` has the elected default over the unreachable
+  floor and `journalctl -u wg-exit-sync` shows the exit flip;
 - the wildcard cert exists under `/var/lib/wg-certs`.
 
-Then set `hub_public_ssh: false` in settings.yml and re-run; only UDP/51820
-stays open to the internet.
+Then set `hub_public_ssh: false` in settings.yml and re-run (no `-e`
+overrides — the overlay works now); only UDP/51820 stays open to the
+internet.
+
+## Reinstalling the hub (fresh OS, same VPS)
+
+The hub is the source of truth for all WireGuard private material: with
+`/etc/wireguard` restored, every router and phone reconnects unchanged;
+without it, new keys are generated and **every peer must be re-paired**
+(re-paste each site's `.rsc`, re-QR every client).
+
+```bash
+# 1. Before wiping: back up keys + certificates (as long as the hub is alive)
+ssh hub.in.threadnull.dev 'sudo tar czf - /etc/wireguard /var/lib/lego' > hub-backup.tgz
+
+# 2. Reinstall the OS from the provider panel, then as root:
+#    INSTALLATION.md step 0 (wg user + sudo), cloud-init status --wait
+
+# 3. The host key changed — clear the old ones locally (host_key_checking is on)
+ssh-keygen -R <hub-public-ip> && ssh-keygen -R '[<hub-public-ip>]:5860' && ssh-keygen -R 10.99.0.1
+
+# 4. Restore the backup (skip to re-key everything instead)
+scp hub-backup.tgz wg@<hub-public-ip>:/tmp/ && \
+  ssh wg@<hub-public-ip> 'sudo tar xzf /tmp/hub-backup.tgz -C / && sudo rm /tmp/hub-backup.tgz'
+
+# 5. Proceed exactly as in "First run" above
+```
+
+Restoring `/var/lib/lego` keeps the Let's Encrypt account and current
+wildcard cert (no reissue, no rate-limit exposure). Site routers and
+clients need nothing: same hub public key, same endpoint — tunnels and
+BGP sessions come back on their own, and wg-exit-sync re-elects the exit
+within seconds of BGP convergence.
 
 ## Adding a site (house)
 

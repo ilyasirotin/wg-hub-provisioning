@@ -41,7 +41,7 @@ ssh -p 22 wg@65.21.177.182
 
 ```bash
 sudo apt update && sudo apt dist-upgrade -y
-sudo apt install -y nftables fail2ban unattended-upgrades qrencode rsync curl python3-pexpect
+sudo apt install -y nftables fail2ban unattended-upgrades qrencode rsync curl
 ```
 
 Удалить ufw — он конфликтует с прямым управлением nftables:
@@ -686,7 +686,7 @@ sudo qrencode -t ansiutf8 < /etc/wireguard/clients/pixel_10_pro_cloud.conf
 /routing bgp instance add name=wg-bgp-inst as=65011 router-id=wg-bgp-id
 
 # 7. Список подсетей для анонса хабу
-/ip firewall address-list add list=BGP-EXPORT address=10.1.0.0/16
+/ip firewall address-list add list=BGP_Export address=10.1.0.0/16
 
 # 8. BGP соединение с хабом. output.default-originate=if-installed (только
 #    на exit-способных сайтах): анонсирует 0.0.0.0/0 пока в таблице есть
@@ -699,7 +699,7 @@ sudo qrencode -t ansiutf8 < /etc/wireguard/clients/pixel_10_pro_cloud.conf
     local.role=ebgp \
     remote.address=10.99.0.1 \
     remote.as=65001 \
-    output.network=BGP-EXPORT \
+    output.network=BGP_Export \
     output.default-originate=if-installed \
     connect=yes \
     listen=yes
@@ -758,7 +758,7 @@ sudo apt install -y frr
 Включить bgpd (все остальные демоны оставить выключенными):
 
 ```bash
-sudo tee /etc/frr/daemons.conf << 'EOF'
+sudo tee /etc/frr/daemons << 'EOF'
 bgpd=yes
 ospfd=no
 ospf6d=no

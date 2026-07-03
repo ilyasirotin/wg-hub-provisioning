@@ -6,9 +6,11 @@ all:
           ansible_host: 10.99.0.1
           ansible_user: wg
           ansible_port: 5860
-          # First run on a fresh server (sshd still on 22):
-          #   ansible-playbook playbooks/hub.yml -e ansible_port=22
-          # sshd moves to 5860 at the end of that run.
+          # First run on a fresh server (no overlay yet, sshd still on 22):
+          #   ansible-playbook playbooks/hub.yml \
+          #     -e ansible_host=<hub-public-ip> -e ansible_port=22
+          # sshd moves to 5860 at the end of that run. See README
+          # "Reinstalling the hub" for the full fresh-install sequence.
     # Service VPSes. On bootstrap ansible_host is the public IP from the
     # Hetzner panel; once the host is inside the overlay, switch it to the
     # wg address and set member_public_ssh: false.
