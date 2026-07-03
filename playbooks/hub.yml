@@ -7,4 +7,5 @@
     - base_hardening
     - wg_hub
     - frr_hub
+    - metrics_hub
     - certs_hub

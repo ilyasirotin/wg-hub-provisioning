@@ -76,6 +76,8 @@ graph TB
 | `dnsmasq` | Авторитетный DNS для `in.threadnull.dev` | Да — рестарт |
 | `lego-renew.timer` | Ежедневное обновление wildcard-сертификата через Cloudflare DNS-01 | Н/П |
 | `fail2ban` | Защита SSH от брутфорса (backend: nftables) | Нет |
+| `prometheus-node-exporter` | Системные метрики на :9100 (опция, `hub_metrics_enabled`) | Нет |
+| `hub-metrics-textfile.timer` | Обновление WireGuard/exit/BGP `.prom` каждые 15 с (опция) | Нет |
 
 ---
 

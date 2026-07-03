@@ -200,6 +200,37 @@ A service's `egress` with no `port` opens all ports toward the target -
 that is what lets Home Assistant reach IoT devices for vacuum control,
 3D-printer cameras, ESPHome, etc.
 
+## Monitoring (optional)
+
+`hub_metrics_enabled: true` in `group_vars/all/settings.yml` (default here,
+`false` if unset) makes the hub export Prometheus metrics on `:9100`,
+reachable over the overlay only from the services listed in
+`metrics_hub_scrapers` (default: `metrics`):
+
+- **node_exporter** — CPU, RAM, disk, network (Debian package, managed by
+  `roles/metrics_hub`);
+- **wireguard.prom** — per-peer latest handshake / rx / tx with `peer` and
+  `kind` (site/client/service) labels, `wireguard_exit_active{site}`,
+  `wireguard_exit_default_present` (fail-closed indicator);
+- **bgp.prom** — `bgp_peer_up`, `bgp_peer_prefixes_received`,
+  `bgp_peer_uptime_seconds` per site.
+
+The textfile collectors refresh every `metrics_hub_interval` (15s) via a
+systemd timer — no extra exporter daemons. Prometheus/Grafana on the
+`metrics` VPS are managed by hand; add the scrape job to
+`/etc/prometheus/prometheus.yml` yourself:
+
+```yaml
+  - job_name: wg-hub
+    static_configs:
+      - targets: ['10.99.0.1:9100']
+```
+
+Useful queries: site tunnel dead —
+`time() - wireguard_peer_latest_handshake_seconds{kind="site"} > 300`;
+exit failed over — `wireguard_exit_active{site!="site_a"} == 1`;
+home clients fail-closed — `wireguard_exit_default_present == 0`.
+
 ## Certificates
 
 lego on the hub, DNS-01 via Cloudflare, renewed by a daily timer. The

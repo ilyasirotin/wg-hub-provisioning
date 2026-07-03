@@ -118,6 +118,16 @@ group names (`users`, `sites`, `iot`, `services`), a site id, or another
 service name. When changing access rules, edit `network.yml` and re-render —
 do not hand-edit rendered output.
 
+**`roles/metrics_hub`** (optional, toggle `hub_metrics_enabled` in
+settings.yml — global on purpose: wg_hub's nftables template reads it too).
+node_exporter (Debian package, wildcard bind — nftables gates access to the
+scraper service IPs from `metrics_hub_scrapers`) plus WireGuard/exit/BGP
+metrics as **textfile collectors**: `hub-metrics-textfile.timer` runs two
+scripts writing `.prom` files into `/var/lib/prometheus/node-exporter` — no
+extra exporter daemons. Peer names come from `/etc/wireguard/clients/*.pub`
+at runtime; kinds and neighbor→site maps are rendered from the model.
+Toggle off → units stopped, scrape hole not rendered (packages stay).
+
 **sysctl:** IPv4 forwarding is set via `ansible.builtin.copy` to
 `/etc/sysctl.d/99-wg-hub.conf` (a single `net.ipv4.ip_forward = 1` line).
 The `99-` prefix ensures it loads last and wins over distro defaults. A

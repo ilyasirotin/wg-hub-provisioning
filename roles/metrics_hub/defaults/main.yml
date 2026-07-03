@@ -1,0 +1,11 @@
+---
+# Prometheus metrics from the hub. The feature toggle is GLOBAL
+# (hub_metrics_enabled in group_vars/all/settings.yml) because the
+# nftables template in wg_hub also reads it; these are role knobs only.
+metrics_hub_port: 9100
+
+# Service names (network.yml -> services) allowed to scrape the hub.
+metrics_hub_scrapers: [metrics]
+
+# Refresh period of the wireguard/bgp textfile collectors, seconds.
+metrics_hub_interval: 15

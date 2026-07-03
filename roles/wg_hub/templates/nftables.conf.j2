@@ -84,6 +84,14 @@ table inet filter {
 
         # BGP - overlay peers only
         iifname "{{ wg_interface }}" tcp dport 179 accept
+{% if hub_metrics_enabled | default(false) %}
+{%   set scraper_ips = services | selectattr('name', 'in', metrics_hub_scrapers | default(['metrics'])) | map(attribute='ip') | list %}
+{%   if scraper_ips %}
+
+        # Prometheus scrape (node_exporter) - metrics service(s) only
+        iifname "{{ wg_interface }}" ip saddr { {{ scraper_ips | join(', ') }} } tcp dport {{ metrics_hub_port | default(9100) }} accept
+{%   endif %}
+{% endif %}
 
         log prefix "nft_input_drop: " counter drop
     }

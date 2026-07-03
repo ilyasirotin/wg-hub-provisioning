@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+# Managed by Ansible (roles/metrics_hub). BGP session metrics for the
+# node_exporter textfile collector. Tolerates missing/stopped FRR (fresh
+# install: frr_hub runs after metrics_hub): writes an empty file, exits 0.
+# NOTE: metric lines are built by concatenation, not str.format/f-strings —
+# "{" + "%" sequences inside format strings would break the Jinja template.
+import json
+import os
+import subprocess
+import sys
+
+OUT = "/var/lib/prometheus/node-exporter/bgp.prom"
+TMP = OUT + ".tmp"
+
+# neighbor overlay IP -> site name (rendered from the model)
+SITES = {
+{% for sid, s in sites.items() %}
+    "{{ s.ip }}": "{{ sid }}",
+{% endfor %}
+}
+
+
+def write(lines):
+    with open(TMP, "w") as f:
+        f.write(("\n".join(lines) + "\n") if lines else "")
+    os.replace(TMP, OUT)
+
+
+def main():
+    try:
+        raw = subprocess.run(
+            ["vtysh", "-c", "show bgp summary json"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+        data = json.loads(raw)
+    except Exception:
+        write([])
+        return
+    peers = (data.get("ipv4Unicast") or {}).get("peers") or {}
+    lines = [
+        "# HELP bgp_peer_up 1 if the BGP session is Established.",
+        "# TYPE bgp_peer_up gauge",
+        "# HELP bgp_peer_prefixes_received Prefixes received from the peer.",
+        "# TYPE bgp_peer_prefixes_received gauge",
+        "# HELP bgp_peer_uptime_seconds Seconds since the session established.",
+        "# TYPE bgp_peer_uptime_seconds gauge",
+    ]
+    for ip, p in sorted(peers.items()):
+        lab = 'site="' + SITES.get(ip, "unknown") + '",neighbor="' + ip + '"'
+        up = 1 if p.get("state") == "Established" else 0
+        pfx = p.get("pfxRcd") or 0
+        uptime = int((p.get("peerUptimeMsec") or 0) // 1000)
+        lines.append("bgp_peer_up{" + lab + "} " + str(up))
+        lines.append("bgp_peer_prefixes_received{" + lab + "} " + str(pfx))
+        lines.append("bgp_peer_uptime_seconds{" + lab + "} " + str(uptime))
+    write(lines)
+
+
+if __name__ == "__main__":
+    main()
+    sys.exit(0)

@@ -33,3 +33,9 @@ cert_domains:
 # Directory on the hub that members pull the certificate from (rsync, RO)
 cert_publish_dir: /var/lib/wg-certs
 cert_sync_user: certsync
+
+# Prometheus metrics from the hub (roles/metrics_hub): node_exporter +
+# wireguard/exit-failover/bgp textfile collectors, scraped over the overlay
+# by the services listed in metrics_hub_scrapers (default: "metrics").
+# false -> exporters stopped, the nftables scrape hole is not rendered.
+hub_metrics_enabled: true

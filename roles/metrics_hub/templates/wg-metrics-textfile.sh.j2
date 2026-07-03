@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Managed by Ansible (roles/metrics_hub). WireGuard + exit-failover metrics
+# for the node_exporter textfile collector. Peer names come from the key
+# files the hub generated (/etc/wireguard/clients/*.pub); peer kinds are
+# rendered from the network model. Must always exit 0: a broken metric
+# source must not fail the timer unit or take out the other collector.
+set -u
+
+IFACE="{{ wg_interface }}"
+TABLE="{{ wg_pbr_table }}"
+OUT=/var/lib/prometheus/node-exporter/wireguard.prom
+TMP="${OUT}.tmp"
+CLIENTS_DIR=/etc/wireguard/clients
+EXIT_MAP=/etc/wireguard/exit-peers.map
+
+# peer name -> kind, rendered from the model
+declare -A KIND=(
+{% for sid in sites %}
+  [{{ sid }}]=site
+{% endfor %}
+{% for c in clients %}
+  [{{ c.name }}]=client
+{% endfor %}
+{% for s in services %}
+  [{{ s.name }}]=service
+{% endfor %}
+)
+
+# pubkey -> peer name
+declare -A NAME
+for f in "$CLIENTS_DIR"/*.pub; do
+  [ -e "$f" ] || continue
+  NAME[$(cat "$f")]=$(basename "$f" .pub)
+done
+
+{
+  echo '# HELP wireguard_peer_latest_handshake_seconds Unix time of the latest handshake with the peer.'
+  echo '# TYPE wireguard_peer_latest_handshake_seconds gauge'
+  echo '# HELP wireguard_peer_receive_bytes_total Bytes received from the peer.'
+  echo '# TYPE wireguard_peer_receive_bytes_total counter'
+  echo '# HELP wireguard_peer_transmit_bytes_total Bytes sent to the peer.'
+  echo '# TYPE wireguard_peer_transmit_bytes_total counter'
+
+  peers=0
+  # wg show dump, peer lines (tab-separated):
+  # pubkey psk endpoint allowed-ips latest-handshake rx tx keepalive
+  while IFS=$'\t' read -r pub _psk _ep _aips hs rx tx _ka; do
+    peers=$((peers + 1))
+    name="${NAME[$pub]:-unknown}"
+    kind="${KIND[$name]:-unknown}"
+    echo "wireguard_peer_latest_handshake_seconds{peer=\"$name\",kind=\"$kind\"} $hs"
+    echo "wireguard_peer_receive_bytes_total{peer=\"$name\",kind=\"$kind\"} $rx"
+    echo "wireguard_peer_transmit_bytes_total{peer=\"$name\",kind=\"$kind\"} $tx"
+  done < <(wg show "$IFACE" dump 2>/dev/null | tail -n +2)
+
+  echo '# HELP wireguard_peers_total Number of configured peers.'
+  echo '# TYPE wireguard_peers_total gauge'
+  echo "wireguard_peers_total $peers"
+
+  # Exit failover: which exit-capable site owns 0.0.0.0/0 right now.
+  echo '# HELP wireguard_exit_active 1 if this exit-capable site currently owns 0.0.0.0/0.'
+  echo '# TYPE wireguard_exit_active gauge'
+  owner=$(wg show "$IFACE" allowed-ips 2>/dev/null \
+    | awk '{ for (i=2;i<=NF;i++) if ($i == "0.0.0.0/0") { print $1; exit } }')
+  if [ -r "$EXIT_MAP" ]; then
+    while read -r gw pub _base; do
+      case "$gw" in ''|\#*) continue ;; esac
+      site="${NAME[$pub]:-unknown}"
+      if [ "$pub" = "$owner" ]; then v=1; else v=0; fi
+      echo "wireguard_exit_active{site=\"$site\"} $v"
+    done < "$EXIT_MAP"
+  fi
+
+  # Fail-closed indicator: is the elected default installed in the PBR table?
+  echo '# HELP wireguard_exit_default_present 1 if the elected exit default is installed in the PBR table.'
+  echo '# TYPE wireguard_exit_default_present gauge'
+  if ip -4 route show table "$TABLE" 2>/dev/null | grep -q '^default .* proto static'; then
+    echo 'wireguard_exit_default_present 1'
+  else
+    echo 'wireguard_exit_default_present 0'
+  fi
+} > "$TMP" && mv "$TMP" "$OUT"
+
+exit 0
