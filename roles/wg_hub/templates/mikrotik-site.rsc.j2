@@ -53,16 +53,16 @@
 
 # 7. Address list: the /16 supernet this site announces to the hub
 /ip firewall address-list add list=BGP_Export address=10.{{ item.number }}.0.0/16 comment="BGP Export"
-{% if item.exit_priority is defined %}
-
-# 7a. Exit-capable site (exit_priority={{ item.exit_priority }}): also announce
-#     a default route. NO anchor route on purpose — the ISP default is the
-#     anchor, so losing WAN withdraws 0.0.0.0/0 (hub fails over to the next
-#     exit site) while the LAN /16 stays announced via its blackhole anchor.
-/ip firewall address-list add list=BGP_Export address=0.0.0.0/0 comment="BGP Export default"
-{% endif %}
 
 # 8. BGP connection to the hub
+{% if item.exit_priority is defined %}
+#    Exit-capable site (exit_priority={{ item.exit_priority }}):
+#    output.default-originate=if-installed announces 0.0.0.0/0 only while a
+#    default route is installed (the ISP PPPoE/DHCP one) — losing WAN
+#    withdraws it and the hub fails over to the next exit site, while the
+#    LAN /16 stays announced via its blackhole anchor. output.network cannot
+#    do this: it only picks up static routes, not the dynamic ISP default.
+{% endif %}
 /routing bgp connection add name=wg-hub \
     instance=wg-bgp-inst \
     local.address={{ item.ip }} \
@@ -70,6 +70,9 @@
     remote.address={{ hub.ip }} \
     remote.as={{ frr_hub_asn }} \
     output.network=BGP_Export \
+{% if item.exit_priority is defined %}
+    output.default-originate=if-installed \
+{% endif %}
     connect=yes \
     listen=yes
 

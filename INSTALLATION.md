@@ -685,12 +685,11 @@ sudo qrencode -t ansiutf8 < /etc/wireguard/clients/pixel_10_pro_cloud.conf
 # 7. Список подсетей для анонса хабу
 /ip firewall address-list add list=BGP-EXPORT address=10.1.0.0/16
 
-# 7a. Exit-способный сайт: также анонсировать дефолт. Якорный маршрут НЕ
-#     нужен — якорем служит ISP-дефолт: умер WAN → 0.0.0.0/0 отозван (хаб
-#     переключается на следующий exit-сайт), LAN /16 остаётся анонсированным.
-/ip firewall address-list add list=BGP-EXPORT address=0.0.0.0/0
-
-# 8. BGP соединение с хабом
+# 8. BGP соединение с хабом. output.default-originate=if-installed (только
+#    на exit-способных сайтах): анонсирует 0.0.0.0/0 пока в таблице есть
+#    установленный дефолт (динамический от ISP) — умер WAN → дефолт отозван,
+#    хаб переключается на следующий exit-сайт. output.network для дефолта
+#    не годится: он подхватывает только статические маршруты.
 /routing bgp connection add name=wg-hub \
     instance=wg-bgp-inst \
     local.address=10.99.0.11 \
@@ -698,6 +697,7 @@ sudo qrencode -t ansiutf8 < /etc/wireguard/clients/pixel_10_pro_cloud.conf
     remote.address=10.99.0.1 \
     remote.as=65001 \
     output.network=BGP-EXPORT \
+    output.default-originate=if-installed \
     connect=yes \
     listen=yes
 
@@ -707,9 +707,10 @@ sudo qrencode -t ansiutf8 < /etc/wireguard/clients/pixel_10_pro_cloud.conf
 ```
 
 Для `site_b` структура идентична: ASN=65012, IP=10.99.0.12, address=10.2.0.0/16,
-allowed-address в WireGuard-пире = `10.99.0.0/24,10.1.0.0/16`. Шаг 7a выполняется
-на каждом exit-способном сайте (какие сайты принимает хаб и с каким приоритетом —
-решает route-map `OVERLAY-IN` на хабе, см. 2.15).
+allowed-address в WireGuard-пире = `10.99.0.0/24,10.1.0.0/16`.
+`output.default-originate=if-installed` ставится на каждом exit-способном сайте
+(какие сайты принимает хаб и с каким приоритетом — решает route-map `OVERLAY-IN`
+на хабе, см. 2.15).
 
 ### 2.14 Запуск всех сервисов
 

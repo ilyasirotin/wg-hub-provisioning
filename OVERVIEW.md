@@ -211,9 +211,12 @@ via the masquerade rule in the nftables NAT table — no PBR needed.
 ### Exit Failover
 
 Any site with `exit_priority` in `network.yml` is exit-capable and announces
-`0.0.0.0/0` to the hub over the existing BGP session (the `BGP_Export` address
-list; the ISP default is the natural anchor — if the site's WAN dies, the
-default is withdrawn while its LAN /16 stays announced). On the hub:
+`0.0.0.0/0` to the hub over the existing BGP session via
+`output.default-originate=if-installed`: the default is originated only while
+a default route is installed on the router (the dynamic ISP PPPoE/DHCP one),
+so a dead WAN self-withdraws it while the LAN /16 stays announced.
+(`output.network` cannot do this — it only picks up static routes, which is
+why the /16 needs its blackhole anchor and the default does not.) On the hub:
 
 1. **FRR** accepts a default only from exit-capable sites (route-map `OVERLAY-IN`,
    matched by nexthop) and prefers the lowest `exit_priority`

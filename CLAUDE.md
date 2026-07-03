@@ -146,10 +146,12 @@ it on the hub via `delegate_to`).
 - Site LAN routes live in BGP, not in `wg0-routes.sh`. Add routes by adding
   subnets to the MikroTik `BGP_Export` address list, not by editing the script.
 - Exit-node failover is model-driven: give a site `exit_priority` (unique,
-  lower = preferred) and re-apply. The site's rendered `.rsc` then exports
-  `0.0.0.0/0` (no anchor route on purpose — the ISP default is the anchor, so
-  a dead WAN self-withdraws). Never render `0.0.0.0/0` into `wg0.conf` — it is
-  runtime state owned by `wg-exit-sync`.
+  lower = preferred) and re-apply. The site's rendered `.rsc` then sets
+  `output.default-originate=if-installed` on the BGP connection (originates
+  `0.0.0.0/0` only while the ISP default route is installed, so a dead WAN
+  self-withdraws; `output.network` can't do this — it only picks up static
+  routes). Never render `0.0.0.0/0` into `wg0.conf` — it is runtime state
+  owned by `wg-exit-sync`.
 
 `routeros/site_a_backup.rsc` / `routeros/site_b_backup.rsc` at the repo root are full MikroTik
 router config exports kept for reference, not rendered artifacts.
