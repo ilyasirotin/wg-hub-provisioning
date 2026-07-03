@@ -73,12 +73,20 @@ Two playbooks, five roles, both playbooks start with `base_hardening`:
    split so peer edits don't restart the tunnel:
    - `wg0.conf.j2` — interface + peers **only** (no PostUp firewall/routes).
      Applied via the `Sync WireGuard peers` handler using `wg syncconf`.
-     Non-exit-node sites use `AllowedIPs = <overlay-ip>/32, 10.<N>.0.0/16`
-     (supernet for WireGuard peer selection; actual LAN routes come from BGP).
+     All sites use `AllowedIPs = <overlay-ip>/32, 10.<N>.0.0/16` (supernet for
+     WireGuard peer selection; actual LAN routes come from BGP). The elected
+     exit site's `0.0.0.0/0` is **runtime state owned by `wg-exit-sync`**,
+     never rendered into the file; syncconf stripping it is expected — the
+     `Restart wg-exit-sync` handler (defined right after the sync handler;
+     definition order matters) re-adds it.
    - `wg0-routes.sh.j2` + a systemd unit bound to `wg-quick@wg0` — overlay
-     subnet (`10.99.0.0/24`) and the policy-based routing (PBR table 123) that
-     sends `profile: home` clients' internet egress out the `exit_node` site
-     router. **Site LAN routes are NOT here** — they are managed by `frr_hub`.
+     subnet (`10.99.0.0/24`), the policy-based routing rules (PBR table 123)
+     for `profile: home` clients, and the table's fail-closed
+     `unreachable default` floor. **Site LAN routes are NOT here** — they are
+     managed by `frr_hub`, and the exit default is elected via BGP (below).
+   - `wg-exit-sync.sh.j2` + service — watches table 123 (`ip monitor` + 10s
+     reconcile) and hands WireGuard's `0.0.0.0/0` to the peer of the current
+     BGP-elected exit nexthop (map rendered to `/etc/wireguard/exit-peers.map`).
    - `nftables.conf.j2` — all access control. Validated with `nft -c` before
      deploy. Forward chain includes MSS clamping (`tcp flags syn tcp option
      maxseg size set rt mtu`). Input chain allows TCP 179 from overlay
@@ -89,7 +97,13 @@ Two playbooks, five roles, both playbooks start with `base_hardening`:
 10.99.0.0/24 peer-group OVERLAY` so new sites connect automatically (hub ASN
 65001, site ASNs 65011/65012/…). Site LAN routes arrive via eBGP and are
 installed with `proto bgp`. When a WireGuard session drops, the BGP hold-timer
-expires and routes are withdrawn — no stale routes.
+(`timers 5 15`) expires and routes are withdrawn — no stale routes.
+**Exit election:** sites with `exit_priority` announce `0.0.0.0/0`; all inbound
+policy lives in the `OVERLAY-IN` route-map (do NOT add a `prefix-list … in` on
+the peer-group — FRR applies both filters and it would drop the default before
+the route-map). The elected default goes to table 123 via the `BGP-TO-KERNEL`
+zebra route-map (`set table`); its terminal `permit` is mandatory, and
+`SAFE-OUT` must keep denying `0.0.0.0/0` outbound (loop prevention).
 
 **nftables zoning is generated from group membership.** `nftables.conf.j2`
 builds named sets (`admin_ips`, `user_ips`, `service_ips`, per-site `*_nets`,
@@ -130,7 +144,12 @@ it on the hub via `delegate_to`).
   `10.N.0.0/16`, VLANs as `10.N.<vlan>.0/24`, `99` reserved for the overlay)
   are load-bearing for readability and for the generated sets — follow them.
 - Site LAN routes live in BGP, not in `wg0-routes.sh`. Add routes by adding
-  subnets to the MikroTik `BGP-EXPORT` address list, not by editing the script.
+  subnets to the MikroTik `BGP_Export` address list, not by editing the script.
+- Exit-node failover is model-driven: give a site `exit_priority` (unique,
+  lower = preferred) and re-apply. The site's rendered `.rsc` then exports
+  `0.0.0.0/0` (no anchor route on purpose — the ISP default is the anchor, so
+  a dead WAN self-withdraws). Never render `0.0.0.0/0` into `wg0.conf` — it is
+  runtime state owned by `wg-exit-sync`.
 
 `routeros/site_a_backup.rsc` / `routeros/site_b_backup.rsc` at the repo root are full MikroTik
 router config exports kept for reference, not rendered artifacts.

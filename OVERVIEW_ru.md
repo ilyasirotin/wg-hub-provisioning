@@ -20,14 +20,16 @@ graph TB
         DNS["dnsmasq :53\nin.threadnull.dev"]
         FW["nftables"]
         RT["wg0-routes.sh\nPBR table 123"]
+        FRR["FRR bgpd\nвыбор exit-дефолта"]
+        EXS["wg-exit-sync\n0/0 → выбранный exit"]
     end
 
-    subgraph SA["Site A — exit node"]
+    subgraph SA["Site A — exit priority 100"]
         RA["router-a · 10.99.0.11"]
         LANA["10.1.10/20/30/40.0/24"]
     end
 
-    subgraph SB["Site B"]
+    subgraph SB["Site B — exit priority 200"]
         RB["router-b · 10.99.0.12"]
         LANB["10.2.10/20/30/40/100.0/24"]
     end
@@ -36,8 +38,8 @@ graph TB
         PH["pixel_1o_pro · 10.99.0.20\ngroup: admin  profile: home"]
     end
 
-    WG <-->|"WireGuard\nAllowedIPs=0.0.0.0/0"| RA
-    WG <-->|"WireGuard\nAllowedIPs=10.99.0.12/32, 10.2.x.x/24"| RB
+    WG <-->|"WireGuard\nAllowedIPs=10.99.0.11/32, 10.1.0.0/16\n(+0.0.0.0/0 пока выбран exit'ом)"| RA
+    WG <-->|"WireGuard\nAllowedIPs=10.99.0.12/32, 10.2.0.0/16"| RB
     WG <-->|"WireGuard\nAllowedIPs=10.99.0.20/32"| PH
 
     RA --- LANA
@@ -67,8 +69,9 @@ graph TB
 | systemd unit | Роль | Перезагружается при изменении пиров |
 |---|---|---|
 | `wg-quick@wg0` | WireGuard-интерфейс + таблица пиров в ядре | Нет — используется `wg syncconf` |
-| `wg0-routes.service` | Маршрут оверлея + PBR table 123 (интернет для home) | Да — полный рестарт |
-| `frr.service` | FRRouting bgpd — динамические LAN-маршруты сайтов через eBGP | Нет — BGP сходится сам |
+| `wg0-routes.service` | Маршрут оверлея + fail-closed пол table 123 (интернет для home) | Да — полный рестарт |
+| `frr.service` | FRRouting bgpd — LAN-маршруты сайтов + выбор exit-дефолта через eBGP | Нет — BGP сходится сам |
+| `wg-exit-sync.service` | Зеркалит BGP-дефолт выбранного exit в wg AllowedIPs 0.0.0.0/0 | Да — рестарт (возвращает 0/0 после syncconf) |
 | `nftables` | Stateful-файрвол | Да — `systemctl reload` |
 | `dnsmasq` | Авторитетный DNS для `in.threadnull.dev` | Да — рестарт |
 | `lego-renew.timer` | Ежедневное обновление wildcard-сертификата через Cloudflare DNS-01 | Н/П |
@@ -96,13 +99,18 @@ WireGuard выбирает, к какому пиру зашифровать па
 
 | Пир | AllowedIPs на хабе |
 |---|---|
-| site_a (exit node) | `0.0.0.0/0` |
-| site_b | `10.99.0.12/32, 10.2.0.0/16` |
+| site_a | `10.99.0.11/32, 10.1.0.0/16` (+ `0.0.0.0/0`, пока выбран exit'ом) |
+| site_b | `10.99.0.12/32, 10.2.0.0/16` (+ `0.0.0.0/0`, пока выбран exit'ом) |
 | pixel_1o_pro | `10.99.0.20/32` |
 
-`0.0.0.0/0` у site_a **не означает**, что весь трафик идёт к нему. Более специфичные
-записи выигрывают: пакет до `10.99.0.12` уходит к site_b (`/32` приоритетнее
-`0.0.0.0/0`). Пакет до неизвестного адреса (интернет) по LPM попадает к site_a.
+`0.0.0.0/0` — **runtime-состояние, а не конфиг**: `wg-exit-sync` отдаёт его тому
+exit-сайту, который сейчас держит лучший BGP-дефолт (см. *Exit failover* ниже);
+в `wg0.conf` его намеренно нет — после `wg syncconf` демон возвращает его за ~1 с.
+
+`0.0.0.0/0` у выбранного exit **не означает**, что весь трафик идёт к нему. Более
+специфичные записи выигрывают: пакет до `10.99.0.12` уходит к site_b (`/32`
+приоритетнее `0.0.0.0/0`). Пакет до неизвестного адреса (интернет) по LPM попадает
+к exit-сайту.
 
 ### `Table = off`
 
@@ -166,8 +174,11 @@ ip route replace 10.99.0.0/24 dev wg0
 # их динамически через eBGP. Просмотр: ip route show proto bgp
 # При падении WireGuard-сессии сайта BGP автоматически отзывает его маршруты.
 
-# PBR table 123: маршрут по умолчанию для home-profile клиентов
-ip route replace default dev wg0 table 123
+# PBR table 123: fail-closed пол. FRR устанавливает сюда BGP-выбранный
+# exit-дефолт с metric 20 (он затеняет пол); когда ни один exit-сайт не
+# анонсирует 0.0.0.0/0, побеждает пол и home-клиенты остаются без интернета
+# (fail closed), а не утекают через аплинк хаба.
+ip route replace unreachable default table 123 metric 4294967294
 
 # Policy rules: home-profile клиенты используют table 123
 ip rule add from 10.99.0.20/32 table 123
@@ -175,8 +186,8 @@ ip rule add from 10.99.0.20/32 table 123
 
 ### Policy-Based Routing (home-profile клиенты)
 
-Устройства с `profile: home` выходят в интернет через домашний роутер (site_a,
-exit node), а не через WAN хаба:
+Устройства с `profile: home` выходят в интернет через **выбранный exit-сайт**
+(в норме site_a — у него высший приоритет), а не через WAN хаба:
 
 ```mermaid
 flowchart LR
@@ -186,7 +197,7 @@ flowchart LR
     INET((Internet))
 
     PH -->|"① encrypted WireGuard packet"| HUB
-    HUB -->|"② ip rule: src 10.99.0.20 → table 123\nip route: default dev wg0\nWireGuard LPM: 0.0.0.0/0 → site_a"| RA
+    HUB -->|"② ip rule: src 10.99.0.20 → table 123\nip route: default via 10.99.0.11 (BGP)\nWireGuard LPM: 0.0.0.0/0 → site_a"| RA
     RA -->|"③ NAT → home WAN IP"| INET
     INET -->|"④ reply"| RA
     RA -->|"⑤ WireGuard → hub"| HUB
@@ -194,11 +205,35 @@ flowchart LR
 ```
 
 Ядро применяет `ip rule` к source IP пакета, находит table 123, находит там
-`default dev wg0`, WireGuard выбирает site_a (единственный пир с
-`AllowedIPs = 0.0.0.0/0`). Роутер site_a маскарадит пакет под свой WAN-адрес.
+BGP-выбранный дефолт, WireGuard выбирает exit-сайт (единственный пир с
+`AllowedIPs = 0.0.0.0/0`, который поддерживает `wg-exit-sync`). Роутер exit-сайта
+маскарадит пакет под свой WAN-адрес.
 
 Устройства с `profile: cloud` (если настроены) выходят через публичный IP хаба
 через masquerade в nftables NAT table — PBR для них не нужен.
+
+### Exit failover
+
+Любой сайт с `exit_priority` в `network.yml` является exit-способным и анонсирует
+хабу `0.0.0.0/0` по существующей BGP-сессии (через address-list `BGP_Export`;
+якорный маршрут не нужен — якорем служит ISP-дефолт: умер WAN → дефолт отозван,
+LAN /16 при этом остаётся анонсированным). На хабе:
+
+1. **FRR** принимает дефолт только от exit-способных сайтов (route-map
+   `OVERLAY-IN`, матч по nexthop) и предпочитает наименьший `exit_priority`
+   (`local-pref = 1000 - priority`) — при восстановлении приоритетного сайта
+   происходит автоматический preempt. Выбранный дефолт устанавливается в PBR
+   table 123 (не в main) через zebra route-map (`set table 123`).
+2. **wg-exit-sync** следит за table 123 (`ip monitor` + reconcile каждые 10 с)
+   и отдаёт `0.0.0.0/0` в AllowedIPs пиру выбранного сайта одной командой
+   `wg set` (ядро атомарно забирает префикс у прежнего владельца).
+
+Детект отказа ограничен BGP hold-таймером (`timers 5 15` на peer-group OVERLAY →
+худший случай ~15 с при смерти туннеля; чистый withdrawal переключается за ~2 с).
+Когда дефолт не анонсирует **ни один** exit-сайт, срабатывает `unreachable`-пол в
+table 123 — home-клиенты остаются без интернета (fail closed), трафик никогда не
+утекает через аплинк хаба. Установленные соединения при переключении рвутся
+(меняется NAT IP exit-сайта) — приложения переподключаются сами.
 
 ### `net.ipv4.ip_forward`
 
@@ -549,8 +584,16 @@ ip route show | grep wg0
 # Все policy routing rules (по одному на каждый home-profile клиент)
 ip rule show
 
-# Содержимое table 123 (должно быть: default dev wg0)
+# Содержимое table 123 (должно быть: default via 10.99.0.1N proto bgp metric 20
+# + fail-closed пол: unreachable default metric 4294967294)
 ip route show table 123
+
+# Кто сейчас владеет 0.0.0.0/0 (должен совпадать с BGP nexthop выше)
+sudo wg show wg0 allowed-ips | grep 0.0.0.0/0
+
+# Демон exit-failover
+systemctl status wg-exit-sync
+journalctl -u wg-exit-sync -n 20
 
 # Статус сервиса wg0-routes и вывод последнего запуска
 systemctl status wg0-routes
@@ -595,8 +638,11 @@ journalctl -u wg0-routes      --since "1 hour ago"
 journalctl -u nftables        --since "1 hour ago"
 journalctl -u dnsmasq         --since "10 minutes ago"
 
+# Решения exit-failover
+journalctl -u wg-exit-sync    --since "1 hour ago"
+
 # Все сервисы хаба одним потоком
-journalctl -u wg-quick@wg0 -u wg0-routes -u nftables -u dnsmasq \
+journalctl -u wg-quick@wg0 -u wg0-routes -u wg-exit-sync -u nftables -u dnsmasq \
   --since "1 hour ago" --no-pager
 
 # Задропанные пакеты, залогированные nftables
@@ -657,13 +703,21 @@ journalctl -u wg-quick@wg0 -u wg0-routes -u nftables -u dnsmasq -f
    $ ip rule show | grep <client-ip>
 
 2. Заполнена ли table 123?
-   $ ip route show table 123   (должно быть: default dev wg0)
+   $ ip route show table 123
+   (должно быть: default via 10.99.0.1N proto bgp metric 20
+                 + unreachable default metric 4294967294)
+   → только unreachable-пол: ни один exit-сайт не анонсирует 0.0.0.0/0
+     (fail-closed by design) — проверить BGP: vtysh -c 'show bgp ipv4 unicast 0.0.0.0/0'
 
-3. Есть ли активный handshake с site_a?
+3. Совпадает ли WireGuard 0.0.0.0/0 с BGP nexthop?
+   $ sudo wg show wg0 allowed-ips   (0.0.0.0/0 должен быть у выбранного exit-пира)
+   $ journalctl -u wg-exit-sync -n 20
+
+4. Есть ли активный handshake с exit-сайтом?
    $ sudo wg show wg0 latest-handshakes
 
-4. Маскарадит ли MikroTik site_a трафик из 10.99.0.0/24?
-   (Хаб НЕ маскарадит home-profile клиентов — это задача site_a)
+5. Маскарадит ли MikroTik exit-сайта трафик из 10.99.0.0/24?
+   (Хаб НЕ маскарадит home-profile клиентов — это задача exit-сайта)
 ```
 
 ---

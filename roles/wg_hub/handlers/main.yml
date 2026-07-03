@@ -14,6 +14,15 @@
     executable: /bin/bash
   changed_when: true
 
+# Defined DIRECTLY after "Sync WireGuard peers" on purpose: handlers run in
+# definition order, and syncconf strips the runtime 0.0.0.0/0 that
+# wg-exit-sync owns — restarting the daemon right after re-adds it in ~1s.
+- name: Restart wg-exit-sync
+  ansible.builtin.systemd:
+    name: wg-exit-sync
+    state: restarted
+    daemon_reload: true
+
 - name: Apply WireGuard routes
   ansible.builtin.systemd:
     name: wg0-routes

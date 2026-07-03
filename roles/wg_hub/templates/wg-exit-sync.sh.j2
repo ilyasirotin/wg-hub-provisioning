@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Managed by Ansible. Mirrors the BGP-elected exit default into WireGuard:
+# whichever exit site's router owns the best 0.0.0.0/0 in table
+# {{ wg_pbr_table }} (installed there by FRR, roles/frr_hub) gets 0.0.0.0/0
+# in its wg AllowedIPs, so cryptokey routing sends home-profile internet
+# traffic to it. No BGP default -> strip 0/0 from everyone (fail closed;
+# the unreachable floor in table {{ wg_pbr_table }} blackholes the traffic).
+#
+# Deliberately no `set -e`: the reconcile loop must survive transient errors.
+set -u
+
+IFACE="{{ wg_interface }}"
+TABLE="{{ wg_pbr_table }}"
+MAP=/etc/wireguard/exit-peers.map
+INTERVAL=10   # periodic reconcile safety net, seconds
+
+desired_gw() { # nexthop of the FRR-installed default in $TABLE, if any
+  ip -4 route show table "$TABLE" \
+    | awk '$1 == "default" && / proto bgp / { for (i=1;i<NF;i++) if ($i=="via") { print $(i+1); exit } }'
+}
+current_owner() { # pubkey currently holding 0.0.0.0/0, if any
+  wg show "$IFACE" allowed-ips \
+    | awk '{ for (i=2;i<=NF;i++) if ($i == "0.0.0.0/0") { print $1; exit } }'
+}
+map_by_gw()    { awk -v k="$1" '$1 == k { print $2, $3; exit }' "$MAP"; }
+base_for_pub() { awk -v k="$1" '$2 == k { print $3; exit }' "$MAP"; }
+
+reconcile() {
+  local gw cur pub base
+  gw=$(desired_gw); cur=$(current_owner)
+  if [ -z "$gw" ]; then
+    # Fail closed: no exit site announces a default.
+    if [ -n "$cur" ]; then
+      base=$(base_for_pub "$cur")
+      if [ -n "$base" ]; then
+        echo "no BGP default in table $TABLE: stripping 0.0.0.0/0 from $cur"
+        wg set "$IFACE" peer "$cur" allowed-ips "$base"
+      else
+        echo "WARNING: 0.0.0.0/0 owned by unmapped peer $cur; leaving as-is"
+      fi
+    fi
+    return 0
+  fi
+  read -r pub base <<<"$(map_by_gw "$gw")"
+  if [ -z "${pub:-}" ]; then
+    echo "WARNING: BGP default via $gw has no entry in $MAP; ignoring"
+    return 0
+  fi
+  if [ "$cur" != "$pub" ]; then
+    echo "exit flip: ${cur:-<none>} -> $pub (via $gw)"
+    # AllowedIPs form one trie per interface: this atomically steals
+    # 0.0.0.0/0 from the previous owner. Single call, no cleanup needed.
+    wg set "$IFACE" peer "$pub" allowed-ips "$base,0.0.0.0/0"
+  fi
+}
+
+reconcile
+# React to table-$TABLE route changes; reconcile every $INTERVAL as a safety
+# net (also covers `wg syncconf` stripping 0/0, which emits no route event —
+# though the Ansible handler restarts us for that case anyway).
+while :; do
+  rc=0
+  IFS= read -r -t "$INTERVAL" line || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    case "$line" in *"table $TABLE"*) reconcile ;; esac
+  elif [ "$rc" -gt 128 ]; then
+    reconcile   # read timeout
+  else
+    echo "ip monitor pipe closed; exiting for systemd restart"
+    exit 1
+  fi
+done < <(stdbuf -oL ip -4 monitor route)

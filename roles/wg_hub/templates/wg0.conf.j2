@@ -12,12 +12,10 @@ Table = off
 [Peer]
 PublicKey = {{ wg_hub_peer_data[peer.name]['pub'] }}
 PresharedKey = {{ wg_hub_peer_data[peer.name]['psk'] }}
-{% if peer.kind == 'site' and peer.exit_node | default(false) %}
-{# Exit node: 0.0.0.0/0 lets the hub encrypt internet-bound packets of
-   home-profile clients towards it; all other peers' /32s and subnets
-   win by longest-prefix match. #}
-AllowedIPs = 0.0.0.0/0
-{% elif peer.kind == 'site' %}
+{% if peer.kind == 'site' %}
+{# The elected exit site's 0.0.0.0/0 is RUNTIME state owned by wg-exit-sync
+   (BGP-driven failover) — deliberately not rendered here. `wg syncconf`
+   stripping it is expected; the daemon re-adds it within ~1s. #}
 AllowedIPs = {{ peer.ip }}/32, 10.{{ peer.number }}.0.0/16
 {% else %}
 AllowedIPs = {{ peer.ip }}/32

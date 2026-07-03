@@ -67,9 +67,13 @@ Two playbooks, four roles, both playbooks start with `base_hardening`:
    split so peer edits don't restart the tunnel:
    - `wg0.conf.j2` — interface + peers **only** (no PostUp firewall/routes).
      Applied via the `Sync WireGuard peers` handler using `wg syncconf`.
-   - `wg0-routes.sh.j2` + a systemd unit bound to `wg-quick@wg0` — overlay/site
-     routes and the policy-based routing (PBR table 123) that sends
-     `profile: home` clients' internet egress out the `exit_node` site router.
+   - `wg0-routes.sh.j2` + a systemd unit bound to `wg-quick@wg0` — overlay
+     route, the policy-based routing rules (PBR table 123) for `profile: home`
+     clients' internet egress, and the table's fail-closed `unreachable` floor.
+     The actual exit default is elected via BGP from sites with
+     `exit_priority` (lower = preferred), and `wg-exit-sync.service` mirrors
+     the elected nexthop into WireGuard `AllowedIPs = 0.0.0.0/0` at runtime
+     (never rendered into `wg0.conf`).
    - `nftables.conf.j2` — all access control. Validated with `nft -c` before
      deploy.
 

@@ -171,7 +171,13 @@ Cloudflare token lives only on the hub. Service VPSes pull a read-only copy from
 - Site LAN routes (`10.N.0.0/16`) are installed on the hub dynamically
   via eBGP (FRRouting). When a site tunnel drops, BGP withdraws its routes
   automatically — no blackholing. `wg0-routes.sh` only handles the overlay
-  subnet and PBR table 123 (home-profile internet egress).
+  subnet and the PBR table 123 fail-closed floor (home-profile internet egress).
+- Home-profile internet egress **fails over automatically** between sites
+  with `exit_priority` (lower = preferred, preempts on recovery): exit sites
+  announce `0.0.0.0/0` via BGP, FRR elects the best default into table 123,
+  and `wg-exit-sync` mirrors it into WireGuard AllowedIPs. Detection is
+  bounded by the BGP hold timer (~15s). If no exit site is available, home
+  clients fail closed (no leak via the hub's own IP).
 - Single point of failure is the hub by design (NAT/dynamic-IP routers
   cannot peer directly). If the hub dies, sites keep their own WAN; only
   cross-site and service access pause until it returns.

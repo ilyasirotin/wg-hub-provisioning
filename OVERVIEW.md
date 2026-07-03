@@ -19,14 +19,16 @@ graph TB
         DNS["dnsmasq :53\nin.threadnull.dev"]
         FW["nftables"]
         RT["wg0-routes.sh\nPBR table 123"]
+        FRR["FRR bgpd\ndefault-route election"]
+        EXS["wg-exit-sync\n0/0 → elected exit"]
     end
 
-    subgraph SA["Site A — exit node"]
+    subgraph SA["Site A — exit priority 100"]
         RA["router-a · 10.99.0.11"]
         LANA["10.1.10/20/30/40.0/24"]
     end
 
-    subgraph SB["Site B"]
+    subgraph SB["Site B — exit priority 200"]
         RB["router-b · 10.99.0.12"]
         LANB["10.2.10/20/30/40/100.0/24"]
     end
@@ -35,8 +37,8 @@ graph TB
         PH["pixel_1o_pro · 10.99.0.20\ngroup: admin  profile: home"]
     end
 
-    WG <-->|"WireGuard\nAllowedIPs=0.0.0.0/0"| RA
-    WG <-->|"WireGuard\nAllowedIPs=10.99.0.12/32, 10.2.x.x/24"| RB
+    WG <-->|"WireGuard\nAllowedIPs=10.99.0.11/32, 10.1.0.0/16\n(+0.0.0.0/0 while elected exit)"| RA
+    WG <-->|"WireGuard\nAllowedIPs=10.99.0.12/32, 10.2.0.0/16"| RB
     WG <-->|"WireGuard\nAllowedIPs=10.99.0.20/32"| PH
 
     RA --- LANA
@@ -66,8 +68,9 @@ graph TB
 | systemd unit | Role | Reloads on peer change |
 |---|---|---|
 | `wg-quick@wg0` | WireGuard interface + kernel peer table | No — `wg syncconf` used |
-| `wg0-routes.service` | Overlay route + PBR table 123 (home egress) | Yes — full restart |
-| `frr.service` | FRRouting bgpd — dynamic site LAN routes via eBGP | No — BGP converges |
+| `wg0-routes.service` | Overlay route + PBR table 123 fail-closed floor (home egress) | Yes — full restart |
+| `frr.service` | FRRouting bgpd — site LAN routes + exit default election via eBGP | No — BGP converges |
+| `wg-exit-sync.service` | Mirrors the elected exit's BGP default into wg AllowedIPs 0.0.0.0/0 | Yes — restart (re-adds 0/0 after syncconf) |
 | `nftables` | Stateful firewall | Yes — `systemctl reload` |
 | `dnsmasq` | Authoritative DNS for `in.threadnull.dev` | Yes — restart |
 | `lego-renew.timer` | Daily wildcard cert renewal via Cloudflare DNS-01 | N/A |
@@ -95,13 +98,18 @@ table.
 
 | Peer | AllowedIPs on hub |
 |---|---|
-| site_a (exit node) | `0.0.0.0/0` |
-| site_b | `10.99.0.12/32, 10.2.0.0/16` |
+| site_a | `10.99.0.11/32, 10.1.0.0/16` (+ `0.0.0.0/0` while elected exit) |
+| site_b | `10.99.0.12/32, 10.2.0.0/16` (+ `0.0.0.0/0` while elected exit) |
 | pixel_1o_pro | `10.99.0.20/32` |
 
-`0.0.0.0/0` on site_a does **not** mean all traffic goes to site_a. More-specific
-entries win: a packet to `10.99.0.12` goes to site_b (`/32` beats `0.0.0.0/0`). An
-unknown destination (internet-bound) falls through to site_a by LPM.
+`0.0.0.0/0` is **runtime state, not config**: `wg-exit-sync` assigns it to whichever
+exit-capable site currently holds the best BGP default (see *Exit failover* below),
+and `wg0.conf` deliberately never contains it — after `wg syncconf` strips it, the
+daemon re-adds it within ~1s.
+
+`0.0.0.0/0` on the elected exit does **not** mean all traffic goes there.
+More-specific entries win: a packet to `10.99.0.12` goes to site_b (`/32` beats
+`0.0.0.0/0`). An unknown destination (internet-bound) falls through to the exit by LPM.
 
 ### `Table = off`
 
@@ -163,8 +171,10 @@ ip route replace 10.99.0.0/24 dev wg0
 # dynamically via eBGP. Visible as: ip route show proto bgp
 # When a site's WireGuard session drops, BGP withdraws its routes automatically.
 
-# PBR table 123: default route for home-profile client internet egress
-ip route replace default dev wg0 table 123
+# PBR table 123: fail-closed floor. FRR installs the BGP-elected exit
+# default here with metric 20 (which shadows the floor); when no exit site
+# announces 0.0.0.0/0, the floor wins and home clients fail closed.
+ip route replace unreachable default table 123 metric 4294967294
 
 # Policy rules: home-profile clients use table 123
 ip rule add from 10.99.0.20/32 table 123
@@ -172,8 +182,8 @@ ip rule add from 10.99.0.20/32 table 123
 
 ### Policy-Based Routing (home-profile clients)
 
-Devices with `profile: home` egress to the internet via the home router (site_a,
-the exit node), not via the hub's own WAN:
+Devices with `profile: home` egress to the internet via the **elected exit site**
+(normally site_a, the highest-priority one), not via the hub's own WAN:
 
 ```mermaid
 flowchart LR
@@ -183,7 +193,7 @@ flowchart LR
     INET((Internet))
 
     PH -->|"① encrypted WireGuard packet"| HUB
-    HUB -->|"② ip rule: src 10.99.0.20 → table 123\nip route: default dev wg0\nWireGuard LPM: 0.0.0.0/0 → site_a"| RA
+    HUB -->|"② ip rule: src 10.99.0.20 → table 123\nip route: default via 10.99.0.11 (BGP)\nWireGuard LPM: 0.0.0.0/0 → site_a"| RA
     RA -->|"③ NAT → home WAN IP"| INET
     INET -->|"④ reply"| RA
     RA -->|"⑤ WireGuard → hub"| HUB
@@ -191,11 +201,35 @@ flowchart LR
 ```
 
 The kernel applies `ip rule` to the packet's source IP, finds table 123, finds
-`default dev wg0` there, then WireGuard picks site_a (only peer with
-`AllowedIPs = 0.0.0.0/0`). site_a's own NAT masquerades the packet to its WAN IP.
+the BGP-elected default there, then WireGuard picks the exit site (the only peer
+holding `AllowedIPs = 0.0.0.0/0`, kept in sync by `wg-exit-sync`). The exit
+router's own NAT masquerades the packet to its WAN IP.
 
 Devices with `profile: cloud` (if configured) would use the hub's own public IP
 via the masquerade rule in the nftables NAT table — no PBR needed.
+
+### Exit Failover
+
+Any site with `exit_priority` in `network.yml` is exit-capable and announces
+`0.0.0.0/0` to the hub over the existing BGP session (the `BGP_Export` address
+list; the ISP default is the natural anchor — if the site's WAN dies, the
+default is withdrawn while its LAN /16 stays announced). On the hub:
+
+1. **FRR** accepts a default only from exit-capable sites (route-map `OVERLAY-IN`,
+   matched by nexthop) and prefers the lowest `exit_priority`
+   (`local-pref = 1000 - priority`), so recovery preempts automatically. The
+   elected default is installed into PBR table 123 — not the main table —
+   via a zebra route-map (`set table 123`).
+2. **wg-exit-sync** watches table 123 (`ip monitor` + 10s reconcile) and hands
+   WireGuard's `0.0.0.0/0` AllowedIPs to the elected site's peer with a single
+   `wg set` (the kernel atomically steals the prefix from the previous owner).
+
+Failure detection is bounded by the BGP hold timer (`timers 5 15` on the
+OVERLAY peer-group → ~15s worst case for a dead tunnel; a clean withdrawal
+fails over in ~2s). When **no** exit site announces a default, the
+`unreachable` floor in table 123 fails home clients closed — their traffic
+never leaks out of the hub's own uplink. Established flows do break on
+failover (the exit NAT IP changes); applications reconnect.
 
 ### `net.ipv4.ip_forward`
 
@@ -543,8 +577,16 @@ ip route show | grep wg0
 # All policy routing rules (should have one entry per home-profile client)
 ip rule show
 
-# Table 123 contents (should have: default dev wg0)
+# Table 123 contents (should have: default via 10.99.0.1N proto bgp metric 20
+# and the fail-closed floor: unreachable default metric 4294967294)
 ip route show table 123
+
+# Which peer currently owns 0.0.0.0/0 (must match the BGP nexthop above)
+sudo wg show wg0 allowed-ips | grep 0.0.0.0/0
+
+# Exit failover daemon
+systemctl status wg-exit-sync
+journalctl -u wg-exit-sync -n 20
 
 # wg0-routes service status and last run output
 systemctl status wg0-routes
@@ -589,8 +631,11 @@ journalctl -u wg0-routes      --since "1 hour ago"
 journalctl -u nftables        --since "1 hour ago"
 journalctl -u dnsmasq         --since "10 minutes ago"
 
+# Exit failover decisions
+journalctl -u wg-exit-sync    --since "1 hour ago"
+
 # All hub services in one stream
-journalctl -u wg-quick@wg0 -u wg0-routes -u nftables -u dnsmasq \
+journalctl -u wg-quick@wg0 -u wg0-routes -u wg-exit-sync -u nftables -u dnsmasq \
   --since "1 hour ago" --no-pager
 
 # Dropped packets logged by nftables (prefix set in nftables.conf.j2)
@@ -650,13 +695,21 @@ journalctl -u wg-quick@wg0 -u wg0-routes -u nftables -u dnsmasq -f
    $ ip rule show | grep <client-ip>
 
 2. Is table 123 populated?
-   $ ip route show table 123   (should show: default dev wg0)
+   $ ip route show table 123
+   (should show: default via 10.99.0.1N proto bgp metric 20
+                 + unreachable default metric 4294967294)
+   → only the unreachable floor: no exit site is announcing 0.0.0.0/0
+     (fail-closed by design) — check BGP: vtysh -c 'show bgp ipv4 unicast 0.0.0.0/0'
 
-3. Does site_a have an active handshake?
+3. Does WireGuard 0.0.0.0/0 match the BGP nexthop?
+   $ sudo wg show wg0 allowed-ips   (elected exit peer must hold 0.0.0.0/0)
+   $ journalctl -u wg-exit-sync -n 20
+
+4. Does the exit site have an active handshake?
    $ sudo wg show wg0 latest-handshakes
 
-4. Does site_a's MikroTik masquerade traffic from 10.99.0.0/24?
-   (Hub does NOT masquerade home-profile clients — that's site_a's job)
+5. Does the exit site's MikroTik masquerade traffic from 10.99.0.0/24?
+   (Hub does NOT masquerade home-profile clients — that's the exit's job)
 ```
 
 ---

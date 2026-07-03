@@ -43,10 +43,9 @@ hub:
 # ---------------------------------------------------------------------
 sites:
   site_a:
-    description: "House A - primary (exit node)"
+    description: "House A - primary exit"
     number: 1
     ip: 10.99.0.11
-    exit_node: true
     exit_priority: 100
     subnets:
       - 10.1.10.0/24    # vlan10 ethernet
@@ -58,10 +57,9 @@ sites:
     dns_names: [router-a]
 
   site_b:
-    description: "House B - remote"
+    description: "House B - remote (backup exit)"
     number: 2
     ip: 10.99.0.12
-    exit_node: false
     exit_priority: 200
     subnets:
       - 10.2.10.0/24    # vlan10 ethernet
@@ -80,7 +78,9 @@ sites:
 #                   list "users" in their ingress "from". No LAN access,
 #                   no router management. For family members.
 #   profile: cloud -> internet egress via the VPS (Hetzner IP)
-#   profile: home  -> internet egress via the exit-node router (home IP)
+#   profile: home  -> internet egress via the best available exit site
+#                     (home IP; automatic BGP-driven failover, fail-closed
+#                     when no exit site is reachable)
 # ---------------------------------------------------------------------
 clients:
   - name: pixel_10_pro_home
