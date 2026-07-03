@@ -1,9 +1,14 @@
 ! Managed by Ansible (roles/frr_hub). Do not edit by hand.
-! BGP scaffold for the WireGuard hub — hub ASN {{ frr_hub_asn }}.
+! BGP for the WireGuard hub — hub ASN {{ frr_hub_asn }}.
 ! Site routers peer over the overlay ({{ wg_network }}) using distinct
-! private ASNs and announce their LANs. Once peering is verified, remove
-! the matching static ip-route lines from wg0-routes.sh.j2.
+! private ASNs and announce their LANs. Exit-capable sites (exit_priority
+! in network.yml) additionally announce 0.0.0.0/0; the hub elects the best
+! default by local-preference and installs it into PBR table
+! {{ wg_pbr_table }} (home-profile egress). wg-exit-sync (roles/wg_hub)
+! mirrors the elected nexthop into WireGuard AllowedIPs.
 !
+{% set exit_sites = sites | dict2items | selectattr('value.exit_priority', 'defined')
+                          | sort(attribute='value.exit_priority') | list %}
 frr defaults traditional
 hostname {{ inventory_hostname }}
 log syslog informational
@@ -18,7 +23,7 @@ router bgp {{ frr_hub_asn }}
  neighbor OVERLAY peer-group
  neighbor OVERLAY remote-as external
  neighbor OVERLAY description "WireGuard overlay peers (sites)"
- neighbor OVERLAY bfd
+ neighbor OVERLAY timers {{ frr_hub_overlay_keepalive }} {{ frr_hub_overlay_holdtime }}
  !
  ! Accept BGP connections from any peer on the overlay without per-neighbor config.
  bgp listen range {{ wg_network }} peer-group OVERLAY
@@ -28,14 +33,23 @@ router bgp {{ frr_hub_asn }}
   redistribute connected route-map ONLY-OVERLAY
   neighbor OVERLAY activate
   neighbor OVERLAY soft-reconfiguration inbound
-  neighbor OVERLAY prefix-list SITE-LANS in
-  ! Allow the hub to advertise the overlay subnet AND other sites' LAN routes.
+  ! ALL inbound policy lives in OVERLAY-IN (default-route election + LAN
+  ! filter). Do not add a `prefix-list ... in` here — FRR applies both
+  ! filters and the prefix-list would drop 0.0.0.0/0 before the route-map.
+  neighbor OVERLAY route-map OVERLAY-IN in
+  ! INVARIANT: SAFE-OUT must keep denying 0.0.0.0/0, or sites would learn
+  ! a default via the hub (routing loop / wrong egress).
   neighbor OVERLAY prefix-list SAFE-OUT out
  exit-address-family
 !
-! INBOUND: Permit RFC 1918 site LAN prefixes up to /24; block everything else.
+ip prefix-list DEFAULT-ROUTE seq 5 permit 0.0.0.0/0
+!
+! Site LAN prefixes accepted from peers: RFC 1918 10/8 up to /24.
 ip prefix-list SITE-LANS seq 5 permit 10.0.0.0/8 le 24
-ip prefix-list SITE-LANS seq 10 deny any
+!
+{% for e in exit_sites %}
+ip prefix-list NEXTHOP-{{ e.key | upper | replace('_', '-') }} seq 5 permit {{ e.value.ip }}/32
+{% endfor %}
 !
 ! OUTBOUND TO PEERS: Advertise the overlay and site LANs, block public IPs.
 ip prefix-list SAFE-OUT seq 5 permit {{ wg_network }}
@@ -48,4 +62,29 @@ ip prefix-list OVERLAY-ONLY seq 10 deny any
 !
 route-map ONLY-OVERLAY permit 10
  match ip address prefix-list OVERLAY-ONLY
+!
+! Default-route election: accept 0.0.0.0/0 only from exit-capable sites,
+! preference derived from exit_priority (lower priority -> higher
+! local-pref -> preferred; preempts automatically on recovery).
+{% for e in exit_sites %}
+route-map OVERLAY-IN permit {{ 10 + loop.index0 * 10 }}
+ match ip address prefix-list DEFAULT-ROUTE
+ match ip next-hop prefix-list NEXTHOP-{{ e.key | upper | replace('_', '-') }}
+ set local-preference {{ 1000 - e.value.exit_priority }}
+{% endfor %}
+route-map OVERLAY-IN deny 500
+ match ip address prefix-list DEFAULT-ROUTE
+route-map OVERLAY-IN permit 600
+ match ip address prefix-list SITE-LANS
+!
+! Kernel-install policy: the elected BGP default goes into PBR table
+! {{ wg_pbr_table }} (home-profile egress) instead of main; everything else
+! (site LANs) installs into main as before. Terminal permit is MANDATORY —
+! without it zebra stops installing all other BGP routes.
+route-map BGP-TO-KERNEL permit 10
+ match ip address prefix-list DEFAULT-ROUTE
+ set table {{ wg_pbr_table }}
+route-map BGP-TO-KERNEL permit 20
+!
+ip protocol bgp route-map BGP-TO-KERNEL
 !

@@ -20,6 +20,7 @@ wg_domain: in.threadnull.dev
 wg_network: 10.99.0.0/24
 wg_port: 51820
 wg_interface: wg0
+wg_pbr_table: 123   # PBR table for profile:home egress (FRR + wg0-routes.sh)
 
 hub:
   ip: 10.99.0.1
@@ -27,8 +28,13 @@ hub:
 
 # ---------------------------------------------------------------------
 # Sites: MikroTik routers with LANs behind them.
-#   exit_node: true  -> internet traffic of profile:home clients leaves
-#                       through this router (PBR table 123). Exactly one.
+#   exit_priority    -> int 1-999, unique. Present = the site can carry
+#                       internet egress of profile:home clients. Lower =
+#                       preferred. The site announces 0.0.0.0/0 via BGP;
+#                       the hub elects the best default (local-pref =
+#                       1000 - priority) and fails over automatically,
+#                       preempting back when the better site recovers.
+#                       No exit site available -> home clients fail closed.
 #   subnets          -> LAN subnets routed across the overlay.
 #   iot_subnets      -> subset of subnets; sources for group "iot" ACLs.
 # Adding a third house: copy a block, number = 3, router IP 10.99.0.13,
@@ -41,6 +47,7 @@ sites:
     number: 1
     ip: 10.99.0.11
     exit_node: true
+    exit_priority: 100
     subnets:
       - 10.1.10.0/24    # vlan10 ethernet
       - 10.1.20.0/24    # vlan20 wlan
@@ -55,6 +62,7 @@ sites:
     number: 2
     ip: 10.99.0.12
     exit_node: false
+    exit_priority: 200
     subnets:
       - 10.2.10.0/24    # vlan10 ethernet
       - 10.2.20.0/24    # vlan20 wlan

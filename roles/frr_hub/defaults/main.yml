@@ -3,3 +3,9 @@
 # Each site router that peers with the hub should use a distinct ASN
 # in the same range (e.g. site_a: 65011, site_b: 65012).
 frr_hub_asn: 65001
+
+# OVERLAY peer-group BGP timers (seconds). Hold = failure-detection budget
+# for exit-node failover; negotiated down to min(hub, router) so setting
+# them here is enough — no RouterOS change needed.
+frr_hub_overlay_keepalive: 5
+frr_hub_overlay_holdtime: 15
