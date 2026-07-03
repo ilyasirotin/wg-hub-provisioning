@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Managed by Ansible. Mirrors the BGP-elected exit default into WireGuard:
-# whichever exit site's router owns the best 0.0.0.0/0 in table
-# {{ wg_pbr_table }} (installed there by FRR, roles/frr_hub) gets 0.0.0.0/0
-# in its wg AllowedIPs, so cryptokey routing sends home-profile internet
-# traffic to it. No BGP default -> strip 0/0 from everyone (fail closed;
-# the unreachable floor in table {{ wg_pbr_table }} blackholes the traffic).
+# Managed by Ansible. Mirrors the BGP-elected exit default into the kernel
+# and WireGuard. bgpd elects the best 0.0.0.0/0 from exit-capable sites
+# (route-map OVERLAY-IN), but zebra never installs it (route-map
+# BGP-TO-KERNEL denies it — `set table` silently fails to load on FRR 10).
+# This daemon polls the election result and programs both halves of the
+# data path:
+#   - the default route in PBR table {{ wg_pbr_table }} (proto static,
+#     metric 20 — shadows the unreachable floor from wg0-routes.sh),
+#   - the 0.0.0.0/0 AllowedIPs of the elected peer (cryptokey routing).
+# No BGP default -> remove both (fail closed via the floor).
 #
 # Deliberately no `set -e`: the reconcile loop must survive transient errors.
 set -u
@@ -12,11 +16,26 @@ set -u
 IFACE="{{ wg_interface }}"
 TABLE="{{ wg_pbr_table }}"
 MAP=/etc/wireguard/exit-peers.map
-INTERVAL=10   # periodic reconcile safety net, seconds
+INTERVAL=5   # poll period, seconds; failover latency = BGP detection + this
 
-desired_gw() { # nexthop of the FRR-installed default in $TABLE, if any
+desired_gw() { # nexthop of bgpd's current best valid 0.0.0.0/0, if any
+  vtysh -c 'show bgp ipv4 unicast 0.0.0.0/0 json' 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+for p in d.get("paths", []):
+    if p.get("bestpath", {}).get("overall") and p.get("valid"):
+        nh = (p.get("nexthops") or [{}])[0].get("ip")
+        if nh:
+            print(nh)
+        break
+'
+}
+current_gw() { # nexthop of the daemon-installed default in $TABLE, if any
   ip -4 route show table "$TABLE" \
-    | awk '$1 == "default" && / proto bgp / { for (i=1;i<NF;i++) if ($i=="via") { print $(i+1); exit } }'
+    | awk '$1 == "default" && / proto static / { for (i=1;i<NF;i++) if ($i=="via") { print $(i+1); exit } }'
 }
 current_owner() { # pubkey currently holding 0.0.0.0/0, if any
   wg show "$IFACE" allowed-ips \
@@ -26,14 +45,18 @@ map_by_gw()    { awk -v k="$1" '$1 == k { print $2, $3; exit }' "$MAP"; }
 base_for_pub() { awk -v k="$1" '$2 == k { print $3; exit }' "$MAP"; }
 
 reconcile() {
-  local gw cur pub base
-  gw=$(desired_gw); cur=$(current_owner)
+  local gw cur have pub base
+  gw=$(desired_gw); cur=$(current_owner); have=$(current_gw)
   if [ -z "$gw" ]; then
     # Fail closed: no exit site announces a default.
+    if [ -n "$have" ]; then
+      echo "no BGP default: removing default via $have from table $TABLE"
+      ip route del default proto static table "$TABLE" 2>/dev/null || true
+    fi
     if [ -n "$cur" ]; then
       base=$(base_for_pub "$cur")
       if [ -n "$base" ]; then
-        echo "no BGP default in table $TABLE: stripping 0.0.0.0/0 from $cur"
+        echo "no BGP default: stripping 0.0.0.0/0 from $cur"
         wg set "$IFACE" peer "$cur" allowed-ips "$base"
       else
         echo "WARNING: 0.0.0.0/0 owned by unmapped peer $cur; leaving as-is"
@@ -46,6 +69,10 @@ reconcile() {
     echo "WARNING: BGP default via $gw has no entry in $MAP; ignoring"
     return 0
   fi
+  if [ "$have" != "$gw" ]; then
+    echo "table $TABLE: default -> via $gw"
+    ip route replace default via "$gw" dev "$IFACE" table "$TABLE" metric 20 proto static
+  fi
   if [ "$cur" != "$pub" ]; then
     echo "exit flip: ${cur:-<none>} -> $pub (via $gw)"
     # AllowedIPs form one trie per interface: this atomically steals
@@ -54,19 +81,9 @@ reconcile() {
   fi
 }
 
+# Also covers `wg syncconf` stripping 0/0 (the Ansible handler restarts us
+# for the fast path; the poll is the safety net).
 reconcile
-# React to table-$TABLE route changes; reconcile every $INTERVAL as a safety
-# net (also covers `wg syncconf` stripping 0/0, which emits no route event —
-# though the Ansible handler restarts us for that case anyway).
-while :; do
-  rc=0
-  IFS= read -r -t "$INTERVAL" line || rc=$?
-  if [ "$rc" -eq 0 ]; then
-    case "$line" in *"table $TABLE"*) reconcile ;; esac
-  elif [ "$rc" -gt 128 ]; then
-    reconcile   # read timeout
-  else
-    echo "ip monitor pipe closed; exiting for systemd restart"
-    exit 1
-  fi
-done < <(stdbuf -oL ip -4 monitor route)
+while sleep "$INTERVAL"; do
+  reconcile
+done

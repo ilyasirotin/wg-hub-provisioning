@@ -84,9 +84,10 @@ Two playbooks, five roles, both playbooks start with `base_hardening`:
      for `profile: home` clients, and the table's fail-closed
      `unreachable default` floor. **Site LAN routes are NOT here** — they are
      managed by `frr_hub`, and the exit default is elected via BGP (below).
-   - `wg-exit-sync.sh.j2` + service — watches table 123 (`ip monitor` + 10s
-     reconcile) and hands WireGuard's `0.0.0.0/0` to the peer of the current
-     BGP-elected exit nexthop (map rendered to `/etc/wireguard/exit-peers.map`).
+   - `wg-exit-sync.sh.j2` + service — polls the BGP election from bgpd
+     (vtysh JSON, every 5s) and programs both the table-123 default
+     (`proto static`, metric 20) and WireGuard's `0.0.0.0/0` on the elected
+     peer (map rendered to `/etc/wireguard/exit-peers.map`).
    - `nftables.conf.j2` — all access control. Validated with `nft -c` before
      deploy. Forward chain includes MSS clamping (`tcp flags syn tcp option
      maxseg size set rt mtu`). Input chain allows TCP 179 from overlay
@@ -101,9 +102,12 @@ installed with `proto bgp`. When a WireGuard session drops, the BGP hold-timer
 **Exit election:** sites with `exit_priority` announce `0.0.0.0/0`; all inbound
 policy lives in the `OVERLAY-IN` route-map (do NOT add a `prefix-list … in` on
 the peer-group — FRR applies both filters and it would drop the default before
-the route-map). The elected default goes to table 123 via the `BGP-TO-KERNEL`
-zebra route-map (`set table`); its terminal `permit` is mandatory, and
-`SAFE-OUT` must keep denying `0.0.0.0/0` outbound (loop prevention).
+the route-map). The elected default is kept OUT of the kernel by the
+`BGP-TO-KERNEL` route-map (deny default / terminal `permit` — the permit is
+mandatory or site LAN routes stop installing; zebra `set table` silently fails
+to load on FRR 10, don't use it). `wg-exit-sync` reads the election from bgpd
+and programs table 123 itself. `SAFE-OUT` must keep denying `0.0.0.0/0`
+outbound (loop prevention).
 
 **nftables zoning is generated from group membership.** `nftables.conf.j2`
 builds named sets (`admin_ips`, `user_ips`, `service_ips`, per-site `*_nets`,

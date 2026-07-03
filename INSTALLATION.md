@@ -336,12 +336,14 @@ sudo systemctl daemon-reload
 
 ### 2.8a Демон exit-failover (`wg-exit-sync`)
 
-Владелец `0.0.0.0/0` в WireGuard AllowedIPs — runtime-состояние. Exit-способные
-сайты анонсируют дефолт по BGP; FRR (2.15) выбирает лучший и ставит его в
-таблицу 123. Демон зеркалит nexthop выбранного дефолта в AllowedIPs — при
-падении текущего exit-сайта хаб автоматически переключается на следующий,
-при восстановлении возвращается (preempt). Если дефолт не анонсирует никто —
-демон снимает 0/0, а unreachable-пол в таблице 123 даёт fail-closed.
+Exit data path — runtime-состояние. Exit-способные сайты анонсируют дефолт по
+BGP; FRR (2.15) выбирает лучший, но zebra его в ядро не ставит. Демон
+опрашивает результат election у bgpd (каждые 5 с) и программирует обе
+половины: дефолт в таблице 123 (`proto static`, metric 20) и `0.0.0.0/0` в
+AllowedIPs выбранного пира — при падении текущего exit-сайта хаб
+автоматически переключается на следующий, при восстановлении возвращается
+(preempt). Если дефолт не анонсирует никто — демон убирает и маршрут, и 0/0,
+а unreachable-пол в таблице 123 даёт fail-closed.
 
 Карта соответствия nexthop → пир (по одной строке на exit-сайт, в порядке
 приоритета):
@@ -356,9 +358,10 @@ sudo chmod 600 /etc/wireguard/exit-peers.map
 ```
 
 Скрипт демона — см. `roles/wg_hub/templates/wg-exit-sync.sh.j2` (логика:
-`ip monitor route` + reconcile каждые 10 с; смена владельца — одна команда
-`wg set <peer> allowed-ips <base>,0.0.0.0/0`, ядро атомарно забирает префикс
-у прежнего владельца). Установить в `/usr/local/sbin/wg-exit-sync.sh`
+`vtysh -c 'show bgp ipv4 unicast 0.0.0.0/0 json'` → nexthop лучшего пути →
+`ip route replace default via <gw> dev wg0 table 123 metric 20 proto static`
++ `wg set <peer> allowed-ips <base>,0.0.0.0/0`; ядро атомарно забирает
+префикс у прежнего владельца). Установить в `/usr/local/sbin/wg-exit-sync.sh`
 (chmod 755) и создать юнит:
 
 ```bash
@@ -743,8 +746,10 @@ sudo systemctl enable --now wg-exit-sync
 сайтов (`10.N.0.0/16`) устанавливаются динамически — при падении туннеля маршруты
 отзываются автоматически. Кроме того, здесь живёт **выбор exit-дефолта**: сайты с
 `exit_priority` анонсируют `0.0.0.0/0`, route-map `OVERLAY-IN` принимает дефолт только
-от них и назначает local-pref (= 1000 − priority), а zebra route-map `BGP-TO-KERNEL`
-ставит выбранный дефолт в таблицу 123 (не в main).
+от них и назначает local-pref (= 1000 − priority). Route-map `BGP-TO-KERNEL` не пускает
+выбранный дефолт в ядро (иначе при флапе аплинка он мог бы захватить egress самого
+хаба; zebra `set table` в FRR 10 молча не загружается) — в таблицу 123 его ставит
+демон wg-exit-sync (2.8a).
 
 ```bash
 sudo apt install -y frr
@@ -840,12 +845,11 @@ route-map OVERLAY-IN deny 500
 route-map OVERLAY-IN permit 600
  match ip address prefix-list SITE-LANS
 !
-! Выбранный BGP-дефолт -> таблица 123 (PBR home-egress), не в main.
-! Терминальный permit ОБЯЗАТЕЛЕН — без него zebra перестанет ставить
-! в ядро остальные BGP-маршруты.
-route-map BGP-TO-KERNEL permit 10
+! BGP-дефолт НЕ устанавливается zebra в ядро — таблицу 123 программирует
+! демон wg-exit-sync по данным bgpd. Терминальный permit ОБЯЗАТЕЛЕН — без
+! него zebra перестанет ставить в ядро остальные BGP-маршруты.
+route-map BGP-TO-KERNEL deny 10
  match ip address prefix-list DEFAULT-ROUTE
- set table 123
 route-map BGP-TO-KERNEL permit 20
 !
 ip protocol bgp route-map BGP-TO-KERNEL
@@ -1020,7 +1024,7 @@ ip route show proto bgp
 
 ```bash
 ip route show dev wg0          # overlay + маршруты BGP-суперсетей сайтов
-ip route show table 123        # default via 10.99.0.1N proto bgp metric 20
+ip route show table 123        # default via 10.99.0.1N proto static metric 20
                                # + unreachable default metric 4294967294 (пол)
 ip rule show                   # правило: from 10.99.0.20/32 table 123
 sudo wg show wg0 allowed-ips | grep 0.0.0.0/0   # владелец 0/0 = BGP nexthop

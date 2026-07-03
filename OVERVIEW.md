@@ -70,7 +70,7 @@ graph TB
 | `wg-quick@wg0` | WireGuard interface + kernel peer table | No — `wg syncconf` used |
 | `wg0-routes.service` | Overlay route + PBR table 123 fail-closed floor (home egress) | Yes — full restart |
 | `frr.service` | FRRouting bgpd — site LAN routes + exit default election via eBGP | No — BGP converges |
-| `wg-exit-sync.service` | Mirrors the elected exit's BGP default into wg AllowedIPs 0.0.0.0/0 | Yes — restart (re-adds 0/0 after syncconf) |
+| `wg-exit-sync.service` | Programs table-123 default + wg AllowedIPs 0.0.0.0/0 from the BGP election | Yes — restart (re-adds 0/0 after syncconf) |
 | `nftables` | Stateful firewall | Yes — `systemctl reload` |
 | `dnsmasq` | Authoritative DNS for `in.threadnull.dev` | Yes — restart |
 | `lego-renew.timer` | Daily wildcard cert renewal via Cloudflare DNS-01 | N/A |
@@ -171,9 +171,9 @@ ip route replace 10.99.0.0/24 dev wg0
 # dynamically via eBGP. Visible as: ip route show proto bgp
 # When a site's WireGuard session drops, BGP withdraws its routes automatically.
 
-# PBR table 123: fail-closed floor. FRR installs the BGP-elected exit
-# default here with metric 20 (which shadows the floor); when no exit site
-# announces 0.0.0.0/0, the floor wins and home clients fail closed.
+# PBR table 123: fail-closed floor. wg-exit-sync installs the BGP-elected
+# exit default here with metric 20 (which shadows the floor); when no exit
+# site announces 0.0.0.0/0, the floor wins and home clients fail closed.
 ip route replace unreachable default table 123 metric 4294967294
 
 # Policy rules: home-profile clients use table 123
@@ -221,18 +221,22 @@ why the /16 needs its blackhole anchor and the default does not.) On the hub:
 1. **FRR** accepts a default only from exit-capable sites (route-map `OVERLAY-IN`,
    matched by nexthop) and prefers the lowest `exit_priority`
    (`local-pref = 1000 - priority`), so recovery preempts automatically. The
-   elected default is installed into PBR table 123 — not the main table —
-   via a zebra route-map (`set table 123`).
-2. **wg-exit-sync** watches table 123 (`ip monitor` + 10s reconcile) and hands
-   WireGuard's `0.0.0.0/0` AllowedIPs to the elected site's peer with a single
-   `wg set` (the kernel atomically steals the prefix from the previous owner).
+   elected default is deliberately **never installed by zebra** (route-map
+   `BGP-TO-KERNEL` denies it): in the main table it must not hijack the hub's
+   own egress during uplink flaps, and zebra's `set table` silently fails to
+   load on FRR 10.
+2. **wg-exit-sync** polls the election result from bgpd (vtysh JSON, every 5s)
+   and programs both halves of the data path: the default in PBR table 123
+   (`proto static`, metric 20 — shadows the unreachable floor) and WireGuard's
+   `0.0.0.0/0` AllowedIPs on the elected site's peer with a single `wg set`
+   (the kernel atomically steals the prefix from the previous owner).
 
-Failure detection is bounded by the BGP hold timer (`timers 5 15` on the
-OVERLAY peer-group → ~15s worst case for a dead tunnel; a clean withdrawal
-fails over in ~2s). When **no** exit site announces a default, the
-`unreachable` floor in table 123 fails home clients closed — their traffic
-never leaks out of the hub's own uplink. Established flows do break on
-failover (the exit NAT IP changes); applications reconnect.
+Failure detection is bounded by the BGP hold timer plus the poll period
+(`timers 5 15` on the OVERLAY peer-group + 5s poll → ~20s worst case for a
+dead tunnel; a clean withdrawal fails over in ~5s). When **no** exit site
+announces a default, the `unreachable` floor in table 123 fails home clients
+closed — their traffic never leaks out of the hub's own uplink. Established
+flows do break on failover (the exit NAT IP changes); applications reconnect.
 
 ### `net.ipv4.ip_forward`
 
@@ -580,8 +584,9 @@ ip route show | grep wg0
 # All policy routing rules (should have one entry per home-profile client)
 ip rule show
 
-# Table 123 contents (should have: default via 10.99.0.1N proto bgp metric 20
-# and the fail-closed floor: unreachable default metric 4294967294)
+# Table 123 contents (should have: default via 10.99.0.1N proto static
+# metric 20 installed by wg-exit-sync, and the fail-closed floor:
+# unreachable default metric 4294967294)
 ip route show table 123
 
 # Which peer currently owns 0.0.0.0/0 (must match the BGP nexthop above)
@@ -699,7 +704,7 @@ journalctl -u wg-quick@wg0 -u wg0-routes -u nftables -u dnsmasq -f
 
 2. Is table 123 populated?
    $ ip route show table 123
-   (should show: default via 10.99.0.1N proto bgp metric 20
+   (should show: default via 10.99.0.1N proto static metric 20
                  + unreachable default metric 4294967294)
    → only the unreachable floor: no exit site is announcing 0.0.0.0/0
      (fail-closed by design) — check BGP: vtysh -c 'show bgp ipv4 unicast 0.0.0.0/0'

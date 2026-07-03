@@ -3,9 +3,10 @@
 ! Site routers peer over the overlay ({{ wg_network }}) using distinct
 ! private ASNs and announce their LANs. Exit-capable sites (exit_priority
 ! in network.yml) additionally announce 0.0.0.0/0; the hub elects the best
-! default by local-preference and installs it into PBR table
-! {{ wg_pbr_table }} (home-profile egress). wg-exit-sync (roles/wg_hub)
-! mirrors the elected nexthop into WireGuard AllowedIPs.
+! default by local-preference. The elected default is deliberately NOT
+! installed by zebra — wg-exit-sync (roles/wg_hub) reads the election from
+! bgpd and programs PBR table {{ wg_pbr_table }} plus the elected peer's
+! WireGuard AllowedIPs 0.0.0.0/0.
 !
 {% set exit_sites = sites | dict2items | selectattr('value.exit_priority', 'defined')
                           | sort(attribute='value.exit_priority') | list %}
@@ -77,13 +78,15 @@ route-map OVERLAY-IN deny 500
 route-map OVERLAY-IN permit 600
  match ip address prefix-list SITE-LANS
 !
-! Kernel-install policy: the elected BGP default goes into PBR table
-! {{ wg_pbr_table }} (home-profile egress) instead of main; everything else
-! (site LANs) installs into main as before. Terminal permit is MANDATORY —
-! without it zebra stops installing all other BGP routes.
-route-map BGP-TO-KERNEL permit 10
+! Kernel-install policy: zebra must NEVER install the elected BGP default —
+! not into main (during uplink flaps it would hijack the hub's own egress
+! via wg0) and not anywhere else. wg-exit-sync reads the election result
+! from bgpd directly and programs PBR table {{ wg_pbr_table }} itself.
+! (zebra's `set table` silently fails to load on FRR 10 — do not use it.)
+! Terminal permit is MANDATORY — without it zebra stops installing all
+! other BGP routes (site LANs).
+route-map BGP-TO-KERNEL deny 10
  match ip address prefix-list DEFAULT-ROUTE
- set table {{ wg_pbr_table }}
 route-map BGP-TO-KERNEL permit 20
 !
 ip protocol bgp route-map BGP-TO-KERNEL

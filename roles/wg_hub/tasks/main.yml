@@ -167,10 +167,11 @@
   notify: Apply WireGuard routes
 
 # --- exit-node failover ------------------------------------------------
-# The elected exit site's 0.0.0.0/0 AllowedIPs is runtime state: FRR
-# (roles/frr_hub) elects a BGP default into table {{ wg_pbr_table }} and
-# wg-exit-sync mirrors its nexthop into WireGuard. Fail-closed when no
-# exit site announces a default.
+# The exit data path is runtime state: bgpd (roles/frr_hub) elects the
+# best default from exit sites, and wg-exit-sync polls the election and
+# programs both the table-{{ wg_pbr_table }} default route and the elected
+# peer's 0.0.0.0/0 AllowedIPs. Fail-closed when no exit site announces a
+# default.
 - name: Deploy exit peer map (BGP nexthop -> WireGuard pubkey)
   ansible.builtin.template:
     src: exit-peers.map.j2

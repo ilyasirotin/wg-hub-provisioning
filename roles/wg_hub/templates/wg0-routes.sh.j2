@@ -25,9 +25,9 @@ route "$OP" {{ wg_network }} dev "$IFACE"
 # Site LAN routes are now managed by BGP via FRR (roles/frr_hub).
 # Routes installed dynamically: ip route show proto bgp
 
-# Table {{ wg_pbr_table }}: fail-closed floor. FRR (roles/frr_hub) installs
-# the BGP-elected exit default here with metric 20, shadowing the floor;
-# when no exit site announces 0.0.0.0/0 the floor wins and home clients get
+# Table {{ wg_pbr_table }}: fail-closed floor. wg-exit-sync installs the
+# BGP-elected exit default here with metric 20, shadowing the floor; when
+# no exit site announces 0.0.0.0/0 the floor wins and home clients get
 # ICMP unreachable instead of leaking out of the hub's own uplink.
 route "$OP" unreachable default table {{ wg_pbr_table }} metric 4294967294
 
