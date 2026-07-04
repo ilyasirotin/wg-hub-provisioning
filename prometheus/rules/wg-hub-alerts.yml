@@ -1,113 +1,158 @@
 # Alerting rules for the WireGuard hub and nodes. Deployed by hand:
 # copy to /etc/prometheus/rules/ on the metrics VPS (see prometheus/ALERTING.md).
 # Validate: promtool check rules wg-hub-alerts.yml
+#
+# Rules labeled event: "true" are one-shot notifications: the expression
+# stays true for a bounded window and then goes silent; the Alertmanager
+# events route has send_resolved: false, so each event is exactly one
+# Telegram message. Latency budget: collector 5s + scrape 5s + eval 10s
+# + for + group_wait.
 groups:
   - name: availability
+    interval: 10s
     rules:
       - alert: HubDown
         expr: up{job="wg-hub"} == 0
-        for: 2m
+        for: 45s
         labels:
           severity: critical
         annotations:
           summary: "Hub is unreachable for monitoring"
-          description: "Prometheus has failed to scrape {{ $labels.instance }} for over 2 minutes — the hub, node_exporter or the metrics-VPS tunnel is down."
+          description: "Prometheus has failed to scrape {{ $labels.instance }} for over 45 seconds — the hub, node_exporter or the metrics-VPS tunnel is down."
+          dashboard_url: "https://metrics.in.threadnull.dev/d/wg-hub"
 
       - alert: NodeDown
         expr: up{job!="wg-hub"} == 0
-        for: 3m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Node {{ $labels.job }} is unreachable"
-          description: "Target {{ $labels.instance }} (job {{ $labels.job }}) has not responded for over 3 minutes."
-
-      - alert: CollectorsStale
-        expr: time() - node_textfile_mtime_seconds{job="wg-hub"} > 120
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Hub metric collectors are stale"
-          description: "File {{ $labels.file }} has not been refreshed for over 2 minutes — check hub-metrics-textfile.timer on the hub."
-
-  - name: overlay
-    rules:
-      - alert: SiteTunnelDown
-        expr: time() - wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="site"} > 300
         for: 1m
         labels:
           severity: critical
         annotations:
+          summary: "Node {{ $labels.job }} is unreachable"
+          description: "Target {{ $labels.instance }} (job {{ $labels.job }}) has not responded for over 1 minute."
+
+      - alert: CollectorsStale
+        expr: time() - node_textfile_mtime_seconds{job="wg-hub"} > 60
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hub metric collectors are stale"
+          description: "File {{ $labels.file }} has not been refreshed for {{ $value | humanizeDuration }} — check hub-metrics-textfile.timer on the hub."
+
+  - name: overlay
+    interval: 10s
+    rules:
+      - alert: SiteTunnelDown
+        expr: time() - wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="site"} > 240
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
           summary: "Site {{ $labels.peer }} lost its tunnel"
-          description: "No WireGuard handshake for over 5 minutes — the site router is offline or lost internet."
+          description: "No WireGuard handshake for {{ $value | humanizeDuration }} (healthy is under ~2 minutes) — the site router is offline or lost internet."
+          dashboard_url: "https://metrics.in.threadnull.dev/d/wg-hub"
 
       - alert: ServiceTunnelDown
         expr: time() - wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="service"} > 300
-        for: 5m
+        for: 2m
         labels:
           severity: warning
         annotations:
           summary: "Service {{ $labels.peer }} lost its tunnel"
-          description: "No WireGuard handshake for over 5 minutes."
+          description: "No WireGuard handshake for {{ $value | humanizeDuration }}."
+          dashboard_url: "https://metrics.in.threadnull.dev/d/wg-hub"
 
-      # Info event: FIRING = client connected, RESOLVED = disconnected.
-      - alert: ClientSession
-        expr: (time() - wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="client"}) < 180
-        for: 45s
+      # One-shot event: client came online now AND was offline 10 minutes
+      # ago. The 10m window doubles as flap suppression (max one
+      # "connected" per client per 10 minutes).
+      - alert: ClientConnected
+        expr: >-
+          ((time() - wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="client"}) < 150)
+          and
+          ((time() - (wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="client"} offset 10m)) > 900)
         labels:
           severity: info
+          event: "true"
         annotations:
-          summary: "Client {{ $labels.peer }} is online"
-          description: "Session event: FIRING — connected, RESOLVED — disconnected."
+          summary: "Client {{ $labels.peer }} connected"
+          description: "New WireGuard session on the overlay."
 
+      # One-shot event: client is offline now (handshake age 300..900s —
+      # 300 rides out laptop power-save gaps) AND was online 10 minutes ago.
+      - alert: ClientDisconnected
+        expr: >-
+          ((time() - wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="client"}) > 300)
+          and
+          ((time() - wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="client"}) < 900)
+          and
+          ((time() - (wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="client"} offset 10m)) < 750)
+        labels:
+          severity: info
+          event: "true"
+        annotations:
+          summary: "Client {{ $labels.peer }} disconnected"
+          description: "Last handshake {{ $value | humanizeDuration }} ago (disconnect is detected by handshake age, so the session actually ended ~5 minutes back)."
+
+      # One-shot event with direction: fires on the site that just BECAME
+      # the exit (was not the exit 90 seconds ago).
       - alert: ExitSwitched
-        expr: changes(wireguard_exit_active{job="wg-hub"}[5m]) > 0
+        expr: >-
+          wireguard_exit_active{job="wg-hub"} == 1
+          and
+          (wireguard_exit_active{job="wg-hub"} offset 90s) == 0
         labels:
           severity: warning
+          event: "true"
         annotations:
-          summary: "Exit site switched"
-          description: "Exit status of {{ $labels.site }} changed within the last 5 minutes (failover or preempt)."
+          summary: "Exit switched to {{ $labels.site }}"
+          description: "Home-client internet egress now leaves via {{ $labels.site }} (failover or preempt)."
+          dashboard_url: "https://metrics.in.threadnull.dev/d/wg-hub"
 
       - alert: ExitOnBackup
         expr: wireguard_exit_active{job="wg-hub"} == 1 unless on(site) bottomk(1, wireguard_exit_priority{job="wg-hub"})
-        for: 2m
+        for: 30s
         labels:
           severity: warning
         annotations:
           summary: "Exit is running on backup: {{ $labels.site }}"
           description: "Home-client internet egresses via a backup site — the primary exit is not announcing a default route."
+          dashboard_url: "https://metrics.in.threadnull.dev/d/wg-hub"
 
       - alert: FailClosed
         expr: wireguard_exit_default_present{job="wg-hub"} == 0
-        for: 1m
+        for: 30s
         labels:
           severity: critical
         annotations:
           summary: "Home clients have no internet (fail-closed)"
           description: "No exit site announces 0.0.0.0/0 — only the unreachable floor is left in table 123."
+          dashboard_url: "https://metrics.in.threadnull.dev/d/wg-hub"
 
   - name: bgp
+    interval: 10s
     rules:
       - alert: BGPSessionDown
         expr: bgp_peer_up{job="wg-hub"} == 0
-        for: 1m
+        for: 30s
         labels:
           severity: critical
         annotations:
           summary: "BGP session with {{ $labels.site }} is down"
-          description: "Session with {{ $labels.neighbor }} is not in the Established state."
+          description: "Session with {{ $labels.neighbor }} is not in the Established state. This is the fastest site-death signal (hold timer 15s); expect SiteTunnelDown next if the tunnel itself died."
+          dashboard_url: "https://metrics.in.threadnull.dev/d/wg-hub"
 
       - alert: BGPPrefixesMissing
-        expr: bgp_peer_up{job="wg-hub"} == 1 and bgp_peer_prefixes_received{job="wg-hub"} < 2
-        for: 5m
+        expr: bgp_peer_prefixes_received{job="wg-hub"} < 2 and bgp_peer_up{job="wg-hub"} == 1
+        for: 2m
         labels:
           severity: warning
         annotations:
           summary: "{{ $labels.site }} is not announcing all prefixes"
           description: "Received {{ $value }} prefixes instead of 2 — most likely the site's WAN died (default withdrawn), or the LAN announcement is gone."
+          dashboard_url: "https://metrics.in.threadnull.dev/d/wg-hub"
 
   - name: system
+    interval: 30s
     rules:
       - alert: HighCPU
         expr: 100 * (1 - avg by (instance, job) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 90
@@ -149,11 +194,13 @@ groups:
         expr: time() - node_boot_time_seconds < 300
         labels:
           severity: info
+          event: "true"
         annotations:
           summary: "Node rebooted: {{ $labels.job }}"
-          description: "{{ $labels.instance }} booted less than 5 minutes ago."
+          description: "{{ $labels.instance }} booted {{ $value | humanizeDuration }} ago."
 
   - name: certs
+    interval: 1m
     rules:
       - alert: CertExpirySoon
         expr: hub_cert_expiry_timestamp_seconds{job="wg-hub"} - time() < 14 * 86400
@@ -162,4 +209,4 @@ groups:
           severity: warning
         annotations:
           summary: "Wildcard certificate expires soon"
-          description: "Less than 14 days left on *.in.threadnull.dev — lego renews at <30 days, so renewal has been broken (journalctl -u lego-renew on the hub)."
+          description: "{{ $value | humanizeDuration }} left on *.in.threadnull.dev — lego renews at <30 days, so renewal has been broken (journalctl -u lego-renew on the hub)."

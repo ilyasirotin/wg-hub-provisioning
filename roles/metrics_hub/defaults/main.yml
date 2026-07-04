@@ -8,4 +8,5 @@ metrics_hub_port: 9100
 metrics_hub_scrapers: [metrics]
 
 # Refresh period of the wireguard/bgp textfile collectors, seconds.
-metrics_hub_interval: 15
+# Kept low: alerting latency = this + scrape (5s) + rule eval (10s) + for.
+metrics_hub_interval: 5

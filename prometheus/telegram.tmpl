@@ -1,17 +1,54 @@
 {{ define "telegram.message" }}
-{{- range .Alerts }}
-{{- if eq .Status "resolved" -}}
-✅ <b>OK: {{ .Labels.alertname }}</b>
-{{- else if eq .Labels.severity "critical" -}}
-🔴 <b>{{ .Labels.alertname }}</b>
-{{- else if eq .Labels.severity "warning" -}}
-🟡 <b>{{ .Labels.alertname }}</b>
+{{- /* Alert Status Header (events are one-shot, not a fire) */ -}}
+{{- if eq .CommonLabels.event "true" -}}
+📟 <b>EVENT</b> - {{ .GroupLabels.alertname }}
+{{- else if .Alerts.Firing -}}
+🔥 <b>FIRING [{{ len .Alerts.Firing }}]</b> - {{ .GroupLabels.alertname }}
 {{- else -}}
-ℹ️ <b>{{ .Labels.alertname }}</b>
+✅ <b>RESOLVED [{{ len .Alerts.Resolved }}]</b> - {{ .GroupLabels.alertname }}
 {{- end }}
-{{ .Annotations.summary }}
+
+{{ range .Alerts }}
+{{- /* Alert severity and name */ -}}
+{{- if eq .Status "resolved" -}}
+🟢 <b>OK: {{ .Labels.alertname }}</b>
+{{- else if eq .Labels.severity "critical" -}}
+🔴 <b>CRITICAL: {{ .Labels.alertname }}</b>
+{{- else if eq .Labels.severity "warning" -}}
+🟡 <b>WARNING: {{ .Labels.alertname }}</b>
+{{- else -}}
+ℹ️ <b>INFO: {{ .Labels.alertname }}</b>
+{{- end }}
+
+{{- /* Annotations Section */ -}}
+{{- if .Annotations.summary }}
+📝 <b>Summary:</b> <i>{{ .Annotations.summary }}</i>
+{{- end }}
 {{- if .Annotations.description }}
-{{ .Annotations.description }}
+📖 <b>Description:</b>
+<code>{{ .Annotations.description }}</code>
 {{- end }}
+
+{{- /* Filtered Labels Section */ -}}
+🏷 <b>Labels:</b>
+{{- range $key, $value := .Labels }}
+{{- if and (ne $key "alertname") (ne $key "severity") (ne $key "event") }}
+  • <b>{{ $key }}:</b> <code>{{ $value }}</code>
+{{- end }}
+{{- end }}
+
+{{- /* Timestamps */ -}}
+⏱ <b>Started:</b> <code>{{ .StartsAt.Local.Format "2006-01-02 15:04:05" }}</code>
+{{- if eq .Status "resolved" }}
+🛑 <b>Ended:</b> <code>{{ .EndsAt.Local.Format "2006-01-02 15:04:05" }}</code>
+{{- end }}
+
+{{- /* Quick Links */ -}}
+🔗 <b>Links:</b>
+{{- if .GeneratorURL }} <a href="{{ .GeneratorURL }}">Prometheus</a> {{- end }}
+{{- if .Annotations.runbook_url }} | <a href="{{ .Annotations.runbook_url }}">Runbook</a> {{- end }}
+{{- if .Annotations.dashboard_url }} | <a href="{{ .Annotations.dashboard_url }}">Dashboard</a> {{- end }}
+
+➖➖➖➖➖➖➖➖➖➖
 {{ end }}
-{{- end }}
+{{ end }}
