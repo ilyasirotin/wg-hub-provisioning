@@ -231,6 +231,11 @@ Useful queries: site tunnel dead —
 exit failed over — `wireguard_exit_active{site!="site_a"} == 1`;
 home clients fail-closed — `wireguard_exit_default_present == 0`.
 
+A ready-made Grafana dashboard lives in `grafana/wg-hub-dashboard.json`
+(exit status, failover timeline, per-peer handshakes/traffic, BGP):
+Dashboards → New → Import → Upload JSON file. For system metrics import
+dashboard ID 1860 (Node Exporter Full) and pick the `wg-hub` job.
+
 ## Certificates
 
 lego on the hub, DNS-01 via Cloudflare, renewed by a daily timer. The
