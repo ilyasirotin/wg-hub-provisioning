@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-# Managed by Ansible (roles/metrics_hub). BGP session metrics for the
-# node_exporter textfile collector. Tolerates missing/stopped FRR (fresh
-# install: frr_hub runs after metrics_hub): writes an empty file, exits 0.
+# Managed by Ansible (roles/metrics_hub). BGP sessions, BGP RIB routes and
+# kernel routing tables (info-style metrics, value always 1, data in
+# labels) for the node_exporter textfile collector. Tolerates
+# missing/stopped FRR (fresh install: frr_hub runs after metrics_hub):
+# skips the BGP part, kernel routes still export.
 # NOTE: metric lines are built by concatenation, not str.format/f-strings —
 # "{" + "%" sequences inside format strings would break the Jinja template.
 import json
@@ -11,6 +13,7 @@ import sys
 
 OUT = "/var/lib/prometheus/node-exporter/bgp.prom"
 TMP = OUT + ".tmp"
+PBR_TABLE = "{{ wg_pbr_table }}"
 
 # neighbor overlay IP -> site name (rendered from the model)
 SITES = {
@@ -26,16 +29,21 @@ def write(lines):
     os.replace(TMP, OUT)
 
 
-def main():
+def vtysh_json(command):
     try:
         raw = subprocess.run(
-            ["vtysh", "-c", "show bgp summary json"],
+            ["vtysh", "-c", command],
             capture_output=True, text=True, timeout=10,
         ).stdout
-        data = json.loads(raw)
+        return json.loads(raw)
     except Exception:
-        write([])
-        return
+        return None
+
+
+def session_lines():
+    data = vtysh_json("show bgp summary json")
+    if data is None:
+        return []
     peers = (data.get("ipv4Unicast") or {}).get("peers") or {}
     lines = [
         "# HELP bgp_peer_up 1 if the BGP session is Established.",
@@ -53,9 +61,61 @@ def main():
         lines.append("bgp_peer_up{" + lab + "} " + str(up))
         lines.append("bgp_peer_prefixes_received{" + lab + "} " + str(pfx))
         lines.append("bgp_peer_uptime_seconds{" + lab + "} " + str(uptime))
-    write(lines)
+    return lines
+
+
+def bgp_route_lines():
+    data = vtysh_json("show bgp ipv4 unicast json")
+    if data is None:
+        return []
+    lines = [
+        "# HELP bgp_route_info BGP RIB entry; data in labels, value always 1.",
+        "# TYPE bgp_route_info gauge",
+    ]
+    for prefix, paths in sorted((data.get("routes") or {}).items()):
+        for p in paths or []:
+            if not p.get("valid"):
+                continue
+            bp = p.get("bestpath")
+            best = bp is True or (isinstance(bp, dict) and bp.get("overall"))
+            nhs = p.get("nexthops") or [{}]
+            nh = nhs[0].get("ip") or "0.0.0.0"
+            site = SITES.get(nh, "hub" if nh == "0.0.0.0" else "unknown")
+            lab = ('prefix="' + prefix + '",nexthop="' + nh
+                   + '",site="' + site + '",best="'
+                   + ("yes" if best else "no") + '"')
+            lines.append("bgp_route_info{" + lab + "} 1")
+    return lines
+
+
+def kernel_route_lines():
+    lines = [
+        "# HELP hub_route_info Kernel routing table entry; data in labels, value always 1.",
+        "# TYPE hub_route_info gauge",
+    ]
+    for table in ("main", PBR_TABLE):
+        try:
+            raw = subprocess.run(
+                ["ip", "-j", "-4", "route", "show", "table", table],
+                capture_output=True, text=True, timeout=10,
+            ).stdout
+            routes = json.loads(raw)
+        except Exception:
+            continue
+        for r in routes:
+            prefix = r.get("dst") or ""
+            if prefix == "default":
+                prefix = "0.0.0.0/0"
+            proto = r.get("protocol") or r.get("type") or ""
+            lab = ('rt_table="' + table + '",prefix="' + prefix
+                   + '",nexthop="' + (r.get("gateway") or "")
+                   + '",dev="' + (r.get("dev") or "")
+                   + '",proto="' + proto
+                   + '",metric="' + str(r.get("metric", "")) + '"')
+            lines.append("hub_route_info{" + lab + "} 1")
+    return lines
 
 
 if __name__ == "__main__":
-    main()
+    write(session_lines() + bgp_route_lines() + kernel_route_lines())
     sys.exit(0)
