@@ -80,7 +80,12 @@ sudo systemctl reload prometheus
 ### 7. Тест доставки
 
 ```bash
-amtool alert add TestAlert severity=critical summary="delivery test" --alertmanager.url=http://localhost:9093
+# Значения меток с пробелами требуют двойных кавычек ВНУТРИ аргумента
+# (UTF-8-парсер Alertmanager >= 0.28), а summary — это аннотация,
+# именно её печатает telegram-шаблон.
+amtool alert add TestAlert severity=critical \
+  --annotation='summary="delivery test"' \
+  --alertmanager.url=http://localhost:9093
 ```
 
 Сообщение 🔴 должно прийти в Telegram в течение ~15 секунд, а через
