@@ -10,7 +10,7 @@
       "type": "stat",
       "title": "Active exit",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "fixed", "fixedColor": "green" },
@@ -40,7 +40,7 @@
       "type": "stat",
       "title": "Home egress",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
       "fieldConfig": {
         "defaults": {
           "mappings": [
@@ -77,7 +77,7 @@
       "type": "stat",
       "title": "BGP sessions",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
       "fieldConfig": {
         "defaults": {
           "mappings": [
@@ -112,9 +112,9 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Peers online (handshake < 5m)",
+      "title": "Peers online (5m)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
       "fieldConfig": {
         "defaults": {
           "mappings": [],
@@ -140,50 +140,328 @@
     },
     {
       "id": 5,
-      "type": "timeseries",
-      "title": "Handshake age",
+      "type": "stat",
+      "title": "Exit switches (24h)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
-          "min": 0,
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 5,
-            "showPoints": "never",
-            "thresholdsStyle": { "mode": "line" }
-          },
+          "decimals": 0,
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               { "color": "green", "value": null },
-              { "color": "yellow", "value": 180 },
-              { "color": "red", "value": 300 }
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 4 }
             ]
           }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(time() - wireguard_peer_latest_handshake_seconds{job=\"wg-hub\"}) and wireguard_peer_latest_handshake_seconds{job=\"wg-hub\"} > 0",
-          "legendFormat": "{{peer}}"
+          "expr": "sum(changes(wireguard_exit_active{job=\"wg-hub\"}[24h])) / 2",
+          "legendFormat": "switches"
         }
       ]
     },
     {
       "id": 6,
+      "type": "stat",
+      "title": "Hub uptime",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "dtdurations",
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - node_boot_time_seconds{job=\"wg-hub\"}",
+          "legendFormat": "uptime"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "CPU",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 70 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - avg(rate(node_cpu_seconds_total{job=\"wg-hub\",mode=\"idle\"}[$__rate_interval])))",
+          "legendFormat": "cpu"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Memory",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 80 },
+              { "color": "red", "value": 95 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"wg-hub\"} / node_memory_MemTotal_bytes{job=\"wg-hub\"})",
+          "legendFormat": "mem"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Disk /",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 80 },
+              { "color": "red", "value": 95 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - node_filesystem_avail_bytes{job=\"wg-hub\",mountpoint=\"/\"} / node_filesystem_size_bytes{job=\"wg-hub\",mountpoint=\"/\"})",
+          "legendFormat": "disk"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Peers",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 10, "w": 14, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "cellOptions": { "type": "auto" }, "filterable": false },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "text", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Handshake age" },
+            "properties": [
+              { "id": "unit", "value": "s" },
+              { "id": "decimals", "value": 0 },
+              { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green", "value": null },
+                    { "color": "yellow", "value": 180 },
+                    { "color": "red", "value": 300 }
+                  ]
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 1500000000,
+                      "to": null,
+                      "result": { "text": "never", "color": "#666666", "index": 0 }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "RX rate" },
+            "properties": [{ "id": "unit", "value": "Bps" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "TX rate" },
+            "properties": [{ "id": "unit", "value": "Bps" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "RX total" },
+            "properties": [{ "id": "unit", "value": "bytes" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "TX total" },
+            "properties": [{ "id": "unit", "value": "bytes" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Kind" },
+            "properties": [{ "id": "custom.width", "value": 90 }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "footer": { "show": false },
+        "sortBy": [{ "displayName": "Handshake age", "desc": false }]
+      },
+      "transformations": [
+        { "id": "merge", "options": {} },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true },
+            "renameByName": {
+              "peer": "Peer",
+              "kind": "Kind",
+              "Value #A": "Handshake age",
+              "Value #B": "RX rate",
+              "Value #C": "TX rate",
+              "Value #D": "RX total",
+              "Value #E": "TX total"
+            },
+            "indexByName": {
+              "peer": 0,
+              "kind": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4,
+              "Value #D": 5,
+              "Value #E": 6
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - wireguard_peer_latest_handshake_seconds{job=\"wg-hub\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": ""
+        },
+        {
+          "refId": "B",
+          "expr": "rate(wireguard_peer_receive_bytes_total{job=\"wg-hub\"}[$__rate_interval])",
+          "format": "table",
+          "instant": true,
+          "legendFormat": ""
+        },
+        {
+          "refId": "C",
+          "expr": "rate(wireguard_peer_transmit_bytes_total{job=\"wg-hub\"}[$__rate_interval])",
+          "format": "table",
+          "instant": true,
+          "legendFormat": ""
+        },
+        {
+          "refId": "D",
+          "expr": "wireguard_peer_receive_bytes_total{job=\"wg-hub\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": ""
+        },
+        {
+          "refId": "E",
+          "expr": "wireguard_peer_transmit_bytes_total{job=\"wg-hub\"}",
+          "format": "table",
+          "instant": true,
+          "legendFormat": ""
+        }
+      ]
+    },
+    {
+      "id": 11,
       "type": "state-timeline",
       "title": "Exit site over time",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "gridPos": { "h": 10, "w": 10, "x": 14, "y": 8 },
       "fieldConfig": {
         "defaults": {
           "custom": { "fillOpacity": 70, "lineWidth": 0 },
@@ -216,11 +494,11 @@
       ]
     },
     {
-      "id": 7,
+      "id": 12,
       "type": "timeseries",
       "title": "Peer traffic — receive",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
       "fieldConfig": {
         "defaults": {
           "unit": "Bps",
@@ -243,11 +521,11 @@
       ]
     },
     {
-      "id": 8,
+      "id": 13,
       "type": "timeseries",
       "title": "Peer traffic — transmit",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
       "fieldConfig": {
         "defaults": {
           "unit": "Bps",
@@ -270,11 +548,43 @@
       ]
     },
     {
-      "id": 9,
+      "id": 14,
+      "type": "timeseries",
+      "title": "Overlay total throughput",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 26 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0,
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 15, "showPoints": "never" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(wireguard_peer_receive_bytes_total{job=\"wg-hub\"}[$__rate_interval]))",
+          "legendFormat": "RX"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(wireguard_peer_transmit_bytes_total{job=\"wg-hub\"}[$__rate_interval]))",
+          "legendFormat": "TX"
+        }
+      ]
+    },
+    {
+      "id": 15,
       "type": "timeseries",
       "title": "BGP prefixes received (norm: 2 per site)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 20 },
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 26 },
       "fieldConfig": {
         "defaults": {
           "unit": "none",
@@ -298,11 +608,11 @@
       ]
     },
     {
-      "id": 10,
+      "id": 16,
       "type": "stat",
       "title": "BGP session uptime",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 20 },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 26 },
       "fieldConfig": {
         "defaults": {
           "unit": "dtdurations",
@@ -349,5 +659,5 @@
   "timezone": "browser",
   "title": "WireGuard Hub",
   "uid": "wg-hub",
-  "version": 1
+  "version": 2
 }
