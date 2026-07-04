@@ -80,7 +80,7 @@ sudo systemctl reload prometheus
 ### 7. Тест доставки
 
 ```bash
-amtool alert add TestAlert severity=critical summary="тест доставки" --alertmanager.url=http://localhost:9093
+amtool alert add TestAlert severity=critical summary="delivery test" --alertmanager.url=http://localhost:9093
 ```
 
 Сообщение 🔴 должно прийти в Telegram в течение ~15 секунд, а через

@@ -18,8 +18,8 @@ route:
     - matchers: ['severity="critical"']
       group_wait: 15s
       repeat_interval: 4h
-    # Тихий маршрут событий (подключение/отключение клиентов, ребуты):
-    # быстрая доставка, практически без повторов.
+    # Quiet event route (client connect/disconnect, reboots):
+    # fast delivery, effectively no repeats.
     - matchers: ['severity="info"']
       group_wait: 15s
       group_interval: 1m
