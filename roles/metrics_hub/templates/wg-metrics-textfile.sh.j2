@@ -79,6 +79,26 @@ done
   else
     echo 'wireguard_exit_default_present 0'
   fi
+
+  # Exit priorities (constants from the model) so alerting can tell the
+  # primary exit from backups without hardcoding a site name.
+  echo '# HELP wireguard_exit_priority Exit priority from the model (lower = preferred).'
+  echo '# TYPE wireguard_exit_priority gauge'
+{% for sid, s in sites.items() if s.exit_priority is defined %}
+  echo 'wireguard_exit_priority{site="{{ sid }}"} {{ s.exit_priority }}'
+{% endfor %}
+
+  # Wildcard certificate expiry (lego renews at <30 days; alerting warns
+  # at <14 - that means renewal has been broken for two weeks).
+  CERT="{{ cert_publish_dir }}/fullchain.pem"
+  if [ -r "$CERT" ]; then
+    end=$(openssl x509 -enddate -noout -in "$CERT" 2>/dev/null | cut -d= -f2)
+    if [ -n "$end" ]; then
+      echo '# HELP hub_cert_expiry_timestamp_seconds notAfter of the published wildcard certificate.'
+      echo '# TYPE hub_cert_expiry_timestamp_seconds gauge'
+      echo "hub_cert_expiry_timestamp_seconds $(date -d "$end" +%s)"
+    fi
+  fi
 } > "$TMP" && mv "$TMP" "$OUT"
 
 exit 0

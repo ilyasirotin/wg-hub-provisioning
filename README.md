@@ -231,6 +231,10 @@ Useful queries: site tunnel dead —
 exit failed over — `wireguard_exit_active{site!="site_a"} == 1`;
 home clients fail-closed — `wireguard_exit_default_present == 0`.
 
+Telegram alerting (Prometheus rules + Alertmanager, alerts-as-code) lives
+in `prometheus/` — rules, Alertmanager config, message template and the
+step-by-step setup guide (`prometheus/ALERTING.md`, RU).
+
 A ready-made Grafana dashboard lives in `grafana/wg-hub-dashboard.json`
 (exit status, failover timeline, per-peer handshakes/traffic, BGP):
 Dashboards → New → Import → Upload JSON file. For system metrics import

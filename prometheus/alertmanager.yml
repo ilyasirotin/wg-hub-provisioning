@@ -1,0 +1,35 @@
+# Alertmanager for the WireGuard overlay. Deployed by hand: copy to
+# /etc/prometheus/alertmanager.yml on the metrics VPS and set chat_id
+# (see prometheus/ALERTING.md). The bot token lives in a separate file
+# (bot_token_file) and never enters the repo or this config.
+global:
+  resolve_timeout: 5m
+
+templates:
+  - /etc/prometheus/telegram.tmpl
+
+route:
+  receiver: telegram
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 24h
+  routes:
+    - matchers: ['severity="critical"']
+      group_wait: 15s
+      repeat_interval: 4h
+    # Тихий маршрут событий (подключение/отключение клиентов, ребуты):
+    # быстрая доставка, практически без повторов.
+    - matchers: ['severity="info"']
+      group_wait: 15s
+      group_interval: 1m
+      repeat_interval: 168h
+
+receivers:
+  - name: telegram
+    telegram_configs:
+      - bot_token_file: /etc/prometheus/telegram_bot_token
+        chat_id: 0  # CHANGE ME: numeric chat id from getUpdates
+        parse_mode: HTML
+        message: '{{ template "telegram.message" . }}'
+        send_resolved: true

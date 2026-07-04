@@ -1,0 +1,165 @@
+# Alerting rules for the WireGuard hub and nodes. Deployed by hand:
+# copy to /etc/prometheus/rules/ on the metrics VPS (see prometheus/ALERTING.md).
+# Validate: promtool check rules wg-hub-alerts.yml
+groups:
+  - name: availability
+    rules:
+      - alert: HubDown
+        expr: up{job="wg-hub"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Хаб недоступен для мониторинга"
+          description: "Prometheus не может опросить {{ $labels.instance }} более 2 минут — лежит хаб, node_exporter или туннель metrics-VPS."
+
+      - alert: NodeDown
+        expr: up{job!="wg-hub"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Нода {{ $labels.job }} недоступна"
+          description: "Таргет {{ $labels.instance }} (job {{ $labels.job }}) не отвечает более 3 минут."
+
+      - alert: CollectorsStale
+        expr: time() - node_textfile_mtime_seconds{job="wg-hub"} > 120
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Коллекторы метрик хаба не обновляются"
+          description: "Файл {{ $labels.file }} не обновлялся более 2 минут — проверь hub-metrics-textfile.timer на хабе."
+
+  - name: overlay
+    rules:
+      - alert: SiteTunnelDown
+        expr: time() - wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="site"} > 300
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сайт {{ $labels.peer }} потерял туннель"
+          description: "Нет WireGuard-handshake более 5 минут — роутер сайта офлайн или потерял интернет."
+
+      - alert: ServiceTunnelDown
+        expr: time() - wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="service"} > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Сервис {{ $labels.peer }} потерял туннель"
+          description: "Нет WireGuard-handshake более 5 минут."
+
+      # info-событие: FIRING = клиент подключился, RESOLVED = отключился.
+      - alert: ClientSession
+        expr: (time() - wireguard_peer_latest_handshake_seconds{job="wg-hub",kind="client"}) < 180
+        for: 45s
+        labels:
+          severity: info
+        annotations:
+          summary: "Клиент {{ $labels.peer }} в сети"
+          description: "Событие сессии: FIRING — подключился, RESOLVED — отключился."
+
+      - alert: ExitSwitched
+        expr: changes(wireguard_exit_active{job="wg-hub"}[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Переключение exit-сайта"
+          description: "Статус exit у {{ $labels.site }} менялся за последние 5 минут (failover или preempt)."
+
+      - alert: ExitOnBackup
+        expr: wireguard_exit_active{job="wg-hub"} == 1 unless on(site) bottomk(1, wireguard_exit_priority{job="wg-hub"})
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Exit работает на резерве: {{ $labels.site }}"
+          description: "Интернет home-клиентов идёт через резервный сайт — приоритетный exit не анонсирует дефолт."
+
+      - alert: FailClosed
+        expr: wireguard_exit_default_present{job="wg-hub"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Home-клиенты без интернета (fail-closed)"
+          description: "Ни один exit-сайт не анонсирует 0.0.0.0/0 — в таблице 123 остался только unreachable-пол."
+
+  - name: bgp
+    rules:
+      - alert: BGPSessionDown
+        expr: bgp_peer_up{job="wg-hub"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "BGP-сессия с {{ $labels.site }} упала"
+          description: "Сессия с {{ $labels.neighbor }} не в состоянии Established."
+
+      - alert: BGPPrefixesMissing
+        expr: bgp_peer_up{job="wg-hub"} == 1 and bgp_peer_prefixes_received{job="wg-hub"} < 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.site }} анонсирует не все префиксы"
+          description: "Получено {{ $value }} префиксов вместо 2 — вероятно, у сайта умер WAN (дефолт отозван), либо пропал LAN-анонс."
+
+  - name: system
+    rules:
+      - alert: HighCPU
+        expr: 100 * (1 - avg by (instance, job) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Высокая загрузка CPU: {{ $labels.job }}"
+          description: "CPU {{ $labels.instance }} загружен на {{ $value | printf \"%.0f\" }}% дольше 15 минут."
+
+      - alert: HighMemory
+        expr: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Мало свободной памяти: {{ $labels.job }}"
+          description: "Использовано {{ $value | printf \"%.0f\" }}% RAM на {{ $labels.instance }} дольше 15 минут."
+
+      - alert: DiskLow
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Заканчивается диск: {{ $labels.job }}"
+          description: "На {{ $labels.instance }} свободно менее 15% корневой ФС."
+
+      - alert: DiskCritical
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Диск почти закончился: {{ $labels.job }}"
+          description: "На {{ $labels.instance }} свободно менее 5% корневой ФС."
+
+      - alert: InstanceRebooted
+        expr: time() - node_boot_time_seconds < 300
+        labels:
+          severity: info
+        annotations:
+          summary: "Нода перезагрузилась: {{ $labels.job }}"
+          description: "{{ $labels.instance }} загрузился менее 5 минут назад."
+
+  - name: certs
+    rules:
+      - alert: CertExpirySoon
+        expr: hub_cert_expiry_timestamp_seconds{job="wg-hub"} - time() < 14 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Wildcard-сертификат скоро истечёт"
+          description: "До окончания *.in.threadnull.dev менее 14 дней — lego продлевает при <30, значит продление сломано (journalctl -u lego-renew на хабе)."
