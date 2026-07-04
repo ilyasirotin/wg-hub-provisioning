@@ -421,35 +421,35 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "time() - wireguard_peer_latest_handshake_seconds{job=\"wg-hub\"}",
+          "expr": "sum by (peer, kind) (time() - wireguard_peer_latest_handshake_seconds{job=\"wg-hub\"})",
           "format": "table",
           "instant": true,
           "legendFormat": ""
         },
         {
           "refId": "B",
-          "expr": "rate(wireguard_peer_receive_bytes_total{job=\"wg-hub\"}[$__rate_interval])",
+          "expr": "sum by (peer, kind) (rate(wireguard_peer_receive_bytes_total{job=\"wg-hub\"}[$__rate_interval]))",
           "format": "table",
           "instant": true,
           "legendFormat": ""
         },
         {
           "refId": "C",
-          "expr": "rate(wireguard_peer_transmit_bytes_total{job=\"wg-hub\"}[$__rate_interval])",
+          "expr": "sum by (peer, kind) (rate(wireguard_peer_transmit_bytes_total{job=\"wg-hub\"}[$__rate_interval]))",
           "format": "table",
           "instant": true,
           "legendFormat": ""
         },
         {
           "refId": "D",
-          "expr": "wireguard_peer_receive_bytes_total{job=\"wg-hub\"}",
+          "expr": "sum by (peer, kind) (wireguard_peer_receive_bytes_total{job=\"wg-hub\"})",
           "format": "table",
           "instant": true,
           "legendFormat": ""
         },
         {
           "refId": "E",
-          "expr": "wireguard_peer_transmit_bytes_total{job=\"wg-hub\"}",
+          "expr": "sum by (peer, kind) (wireguard_peer_transmit_bytes_total{job=\"wg-hub\"})",
           "format": "table",
           "instant": true,
           "legendFormat": ""
@@ -659,5 +659,5 @@
   "timezone": "browser",
   "title": "WireGuard Hub",
   "uid": "wg-hub",
-  "version": 2
+  "version": 3
 }
