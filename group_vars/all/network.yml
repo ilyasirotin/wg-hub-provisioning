@@ -93,6 +93,26 @@ clients:
     group: user
     profile: cloud         # internet egress via the VPS (Hetzner IP)
 
+  - name: macbook_pro_home
+    ip: 10.99.0.22
+    group: admin
+    profile: home          # internet egress via the exit-node home router
+
+  - name: macbook_pro_cloud
+    ip: 10.99.0.23
+    group: user
+    profile: cloud         # internet egress via the VPS (Hetzner IP)
+
+  - name: thinkpad_home
+    ip: 10.99.0.24
+    group: admin
+    profile: home          # internet egress via the exit-node home router
+
+  - name: thinkpad_cloud
+    ip: 10.99.0.25
+    group: user
+    profile: cloud         # internet egress via the VPS (Hetzner IP)
+
   # Example family member:
   # - name: wife_phone
   #   ip: 10.99.0.30
@@ -128,16 +148,13 @@ clients:
 # Workflow: edit here -> ansible-playbook playbooks/hub.yml
 #                     -> ansible-playbook playbooks/services.yml
 # ---------------------------------------------------------------------
-services: {}
-  # - name: ha
-  #   ip: 10.99.0.100
-  #   dns_names: [ha]
-  #   nginx: true
-  #   nginx_upstream: 127.0.0.1:8123
-  #   ingress:                                                  # who may connect, and where
-  #     - { proto: tcp, port: 80, from: [users, sites, iot] }   # HTTP → HTTPS redirect
-  #     - { proto: tcp, port: 443, from: [users, sites, iot] }
-  #     - { proto: tcp, port: 5860, from: [users, sites, iot] } # SSH to HA
-  #     - { proto: tcp, port: 8883, from: [iot] }               # MQTT over TLS
-  #   egress:                                                   # flows the service may open itself
-  #     - { to: iot_subnets }
+services:
+  - name: metrics
+    ip: 10.99.0.100
+    dns_names: [metrics]
+    nginx: true
+    nginx_upstream: 127.0.0.1:3000
+    ingress:
+      - { proto: tcp, port: 443, from: [sites] }
+      - { proto: tcp, port: 9090, from: [sites] }
+      - { proto: tcp, port: 5860, from: [sites] }

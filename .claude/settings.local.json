@@ -16,5 +16,9 @@
   "sandbox": {
     "enabled": true,
     "autoAllowBashIfSandboxed": false
-  }
+  },
+  "enabledMcpjsonServers": [
+    "ssh-server",
+    "jetbrains-ide"
+  ]
 }

@@ -14,8 +14,14 @@ all:
     # Service VPSes. On bootstrap ansible_host is the public IP from the
     # Hetzner panel; once the host is inside the overlay, switch it to the
     # wg address and set member_public_ssh: false.
-    services: {}
-      # hosts:
+    services:
+      hosts:
+        metrics:
+          ansible_host: 10.99.0.100
+          ansible_user: ops
+          ansible_port: 5860
+          service_name: metrics
+          member_public_ssh: false
       #   general-node:
       #     ansible_host: 10.99.0.100       # public IP during bootstrap; switch to overlay IP after
       #     ansible_user: ha
