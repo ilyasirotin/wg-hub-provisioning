@@ -158,3 +158,12 @@ services:
       - { proto: tcp, port: 443, from: [sites] }
       - { proto: tcp, port: 9090, from: [sites] }
       - { proto: tcp, port: 5860, from: [sites] }
+
+  - name: logs
+    ip: 10.99.0.101
+    dns_names: [logs]
+    nginx: true
+    nginx_upstream: 127.0.0.1:8080
+    ingress:
+      - { proto: tcp, port: 443, from: [sites] }
+      - { proto: tcp, port: 5860, from: [sites] }

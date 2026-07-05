@@ -22,6 +22,13 @@ all:
           ansible_port: 5860
           service_name: metrics
           member_public_ssh: false
+
+        logs:
+          ansible_host: 10.99.0.101
+          ansible_user: ops
+          ansible_port: 5860
+          service_name: logs
+          member_public_ssh: false
       #   general-node:
       #     ansible_host: 10.99.0.100       # public IP during bootstrap; switch to overlay IP after
       #     ansible_user: ha
