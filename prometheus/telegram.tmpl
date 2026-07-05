@@ -1,5 +1,13 @@
 {{ define "telegram.message" }}
-{{- range .Alerts }}
+{{- /* Alert Status Header (events are one-shot, not a fire) */ -}}
+{{- if eq .CommonLabels.event "true" -}}
+📟 <b>EVENT</b> - {{ .GroupLabels.alertname }}
+{{- else if .Alerts.Firing -}}
+🔥 <b>FIRING [{{ len .Alerts.Firing }}]</b> - {{ .GroupLabels.alertname }}
+{{- else -}}
+✅ <b>RESOLVED [{{ len .Alerts.Resolved }}]</b> - {{ .GroupLabels.alertname }}
+{{- end }}
+{{ range .Alerts }}
 {{- if eq .Labels.severity "critical" }}
 🔴 <b>CRITICAL: {{ .Labels.alertname }}</b>
 {{- else if eq .Labels.severity "warning" }}
@@ -9,6 +17,6 @@
 {{- end }}
 📝 <b>Summary:</b> <i>{{ .Annotations.summary }}</i>
 ⏱ <b>Started:</b> <code>{{ .StartsAt.Local.Format "2006-01-02 15:04:05" }}</code>
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {{- end }}
 {{ end }}
