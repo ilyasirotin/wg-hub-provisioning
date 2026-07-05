@@ -13,10 +13,10 @@
 {{- else if eq .Labels.severity "warning" }}
 🟡 <b>WARNING: {{ .Labels.alertname }}</b>
 {{- else }}
-ℹ️ <b>INFO: {{ .Labels.alertname }}</b>
+• <b>INFO: {{ .Labels.alertname }}</b>
 {{- end }}
-📝 <b>Summary:</b> <i>{{ .Annotations.summary }}</i>
-⏱ <b>Started:</b> <code>{{ .StartsAt.Local.Format "2006-01-02 15:04:05" }}</code>
+• <b>Summary:</b> <i>{{ .Annotations.summary }}</i>
+• <b>Started:</b> <code>{{ .StartsAt.Local.Format "2006-01-02 15:04:05" }}</code>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {{- end }}
 {{ end }}
