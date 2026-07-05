@@ -1,7 +1,11 @@
 # Alertmanager for the WireGuard overlay. Deployed by hand: copy to
-# /etc/prometheus/alertmanager.yml on the metrics VPS and set chat_id in
-# BOTH receivers (see prometheus/ALERTING.md). The bot token lives in a
-# separate file (bot_token_file) and never enters the repo or this config.
+# /etc/prometheus/alertmanager.yml on the metrics VPS and set chat_id
+# (see prometheus/ALERTING.md). The bot token lives in a separate file
+# (bot_token_file) and never enters the repo or this config.
+#
+# No resolved messages anywhere (send_resolved: false): recovery is
+# communicated by the next meaningful event (e.g. site_a comes back ->
+# "Exit switched to site_a"), not by ✅ RESOLVED tails.
 global:
   resolve_timeout: 5m
 
@@ -16,10 +20,8 @@ route:
   repeat_interval: 24h
   routes:
     # One-shot events (client connect/disconnect, exit switch, reboots):
-    # separate message per entity, fast delivery, no resolved messages
-    # (the receiver has send_resolved: false).
+    # separate message per entity, fast delivery.
     - matchers: ['event="true"']
-      receiver: telegram-events
       group_by: [alertname, peer, site]
       group_wait: 5s
       group_interval: 30s
@@ -30,13 +32,6 @@ route:
 
 receivers:
   - name: telegram
-    telegram_configs:
-      - bot_token_file: /etc/prometheus/telegram_bot_token
-        chat_id: 0  # CHANGE ME: numeric chat id from getUpdates
-        parse_mode: HTML
-        message: '{{ template "telegram.message" . }}'
-        send_resolved: true
-  - name: telegram-events
     telegram_configs:
       - bot_token_file: /etc/prometheus/telegram_bot_token
         chat_id: 0  # CHANGE ME: numeric chat id from getUpdates

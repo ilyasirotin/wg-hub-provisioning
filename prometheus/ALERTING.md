@@ -54,7 +54,7 @@ scp -P 5860 prometheus/rules/wg-hub-alerts.yml ops@10.99.0.100:/tmp/
 sudo mkdir -p /etc/prometheus/rules
 sudo mv /tmp/alertmanager.yml /tmp/telegram.tmpl /etc/prometheus/
 sudo mv /tmp/wg-hub-alerts.yml /etc/prometheus/rules/
-# chat_id стоит в ДВУХ receivers (telegram и telegram-events) — sed правит оба:
+# ВНИМАНИЕ: подставь реальное число вместо <ТВОЙ_CHAT_ID> прямо в команде:
 sudo sed -i 's/chat_id: 0.*/chat_id: <ТВОЙ_CHAT_ID>/' /etc/prometheus/alertmanager.yml
 ```
 
@@ -131,7 +131,10 @@ amtool alert add TestAlert severity=critical \
 | ExitSwitched | exit переключился **на** конкретный сайт (failover/preempt) | ~25 с |
 | InstanceRebooted | нода перезагрузилась | ~1 мин |
 
-**Stateful-алерты** (FIRING + ✅ RESOLVED):
+**Stateful-алерты** (resolved-сообщений нет ни у кого — восстановление
+видно по следующему осмысленному событию, например «Exit switched to
+site_a»; пока алерт горит, critical напоминает каждые 4 ч, warning — раз
+в сутки):
 
 | Алерт | Условие | for | Уровень |
 |---|---|---|---|
@@ -148,8 +151,10 @@ amtool alert add TestAlert severity=critical \
 | DiskLow / DiskCritical | < 15% / < 5% корневой ФС | 10m / 5m | 🟡 / 🔴 |
 | CertExpirySoon | wildcard-серту < 14 дней (продление сломано) | 1h | 🟡 warning |
 
-Маршрутизация: события — group_wait 5 с, без resolved; critical —
-group_wait 5 с, повтор каждые 4 ч; warning — раз в сутки.
+Маршрутизация: события — group_wait 5 с; critical — group_wait 5 с,
+повтор каждые 4 ч; warning — раз в сутки. Resolved не отправляется
+нигде (send_resolved: false). Формат сообщения: уровень + имя алерта,
+Summary, Started — всё.
 Бюджет задержки: коллектор 5 с + scrape 5 с + eval 10 с + `for` +
 group_wait. Смерть сайта: ~70 с (BGPSessionDown), fail-closed: ~55 с.
 Надоели клиентские события — заглуши маршрут:
