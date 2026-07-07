@@ -1,4 +1,4 @@
-# 2026-07-01 02:44:57 by RouterOS 7.23.1
+# 2026-07-06 23:57:23 by RouterOS 7.23.2
 # software id = XRES-NGT7
 #
 # model = C53UiG+5HPaxD2HPaxD
@@ -187,6 +187,10 @@ add dont-require-permissions=no name=dark_mode owner=ilya policy=\
     \n} else={\r\
     \n    /system leds settings set all-leds-off=never \r\
     \n}"
+/user group
+add comment="IaC: Read-only group for Prometheus exporter" name=monitoring \
+    policy="read,api,!local,!telnet,!ssh,!ftp,!reboot,!write,!policy,!test,!wi\
+    nbox,!password,!web,!sniff,!sensitive,!romon,!rest-api"
 /app
 set cinny firewall-redirects=8094:80:tcp:web
 set goaway container-command-lines=goaway:none:docker.io/pommee/goaway:latest
@@ -358,6 +362,9 @@ add action=accept chain=input comment="IaC: Allow VPN DNS TCP" dst-port=53 \
     in-interface-list=VPN protocol=tcp
 add action=accept chain=input comment="IaC: Allow Management from VPN" \
     dst-port=8291,5946 in-interface-list=VPN protocol=tcp
+add action=accept chain=input comment=\
+    "IaC: Allow RouterOS API from monitoring VPS" dst-port=8728 \
+    in-interface-list=VPN protocol=tcp src-address=10.99.0.100
 add action=drop chain=input comment="IaC: Drop all other input" log=yes \
     log-prefix=Drop_Input_Catchall
 add action=accept chain=forward comment=\
@@ -429,7 +436,7 @@ set ftp disabled=yes
 set telnet disabled=yes
 set www disabled=yes
 set ssh max-sessions=10 port=5946
-set api disabled=yes
+set api address=10.99.0.100/32
 /ip ssh
 set strong-crypto=yes
 /ipv6 firewall filter
@@ -437,9 +444,10 @@ add action=drop chain=input comment="Drop all IPv6 input"
 add action=drop chain=forward comment="Drop all IPv6 forward"
 add action=drop chain=output comment="Drop all IPv6 output"
 /routing bgp connection
-add connect=yes instance=wg-bgp-inst listen=yes local.address=10.99.0.11 \
-    .role=ebgp name=wg-hub output.network=BGP_Export remote.address=10.99.0.1 \
-    .as=65001
+add as=65011 connect=yes disabled=no instance=wg-bgp-inst listen=yes \
+    local.address=10.99.0.11 .role=ebgp name=wg-hub output.default-originate=\
+    if-installed .network=BGP_Export remote.address=10.99.0.1/32 .as=65001 \
+    routing-table=main
 /system clock
 set time-zone-name=Asia/Bishkek
 /system logging

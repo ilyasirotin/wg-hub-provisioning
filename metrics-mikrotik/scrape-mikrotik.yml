@@ -1,0 +1,23 @@
+# Prometheus scrape job for mktxp (akpw/mktxp).
+# Merge into the scrape_configs section of /etc/prometheus/prometheus.yml.
+#
+# mktxp serves ALL routers from a single /metrics endpoint; per-router
+# series carry routerboard_name / routerboard_address labels taken from
+# the mktxp.conf section names. No multi-target relabeling needed.
+#
+# Failure semantics:
+#   up{job="mktxp"} == 0  -> the exporter (container) is down
+#   router unreachable    -> its series disappear (mktxp has no per-router
+#                            up metric) - alert with absent(), see
+#                            alerts-mikrotik.yml
+
+scrape_configs:
+  - job_name: mktxp
+    # A full two-router collection takes ~15-20s (site-b is remote, higher
+    # RTT) - keep the interval/timeout above mktxp's own budgets
+    # (total_max_scrape_duration = 55 in _mktxp.conf).
+    scrape_interval: 60s
+    scrape_timeout: 55s
+    static_configs:
+      - targets:
+          - 127.0.0.1:49090

@@ -1,4 +1,4 @@
-# 2026-07-01 02:38:35 by RouterOS 7.23.1
+# 2026-07-06 23:56:59 by RouterOS 7.23.2
 # software id = 6155-VEVA
 #
 # model = C53UiG+5HPaxD2HPaxD
@@ -9,21 +9,20 @@ add comment="Main bridge" name=bridge vlan-filtering=yes
 set [ find default-name=wifi2 ] channel.band=2ghz-ax .frequency=2402-2462 \
     .width=20/40mhz configuration.country=Kazakhstan .mode=ap .ssid=MT \
     disabled=no name=wifi_2.4 security.authentication-types=wpa2-psk,wpa3-psk \
-    .encryption=ccmp .ft=yes .ft-mobility-domain=0x1234 .ft-over-ds=no \
-    .ft-preserve-vlanid=no .group-encryption=ccmp .group-key-update=40m \
+    .encryption=ccmp .ft=no .ft-mobility-domain=0x1234 .ft-over-ds=no \
+    .ft-preserve-vlanid=no .group-encryption=ccmp .group-key-update=1h \
     .management-encryption=cmac .management-protection=allowed .wps=disable
 add configuration.hide-ssid=yes .mode=ap .ssid=MT-IoT disabled=no \
     mac-address=D2:EA:11:10:2D:F2 master-interface=wifi_2.4 name=wifi_2.4_iot \
-    security.authentication-types=wpa2-psk,wpa3-psk .ft=yes \
+    security.authentication-types=wpa2-psk,wpa3-psk .ft=no \
     .ft-mobility-domain=0x1235 .ft-over-ds=no .ft-preserve-vlanid=no .wps=\
     disable
-set [ find default-name=wifi1 ] channel.band=5ghz-ax .frequency=\
-    5170-5210,5210-5250,5250-5290,5290-5330,5650-5690,5690-5710 \
-    .skip-dfs-channels=10min-cac .width=20/40/80mhz configuration.country=\
+set [ find default-name=wifi1 ] channel.band=5ghz-ax .frequency=5170-5250 \
+    .skip-dfs-channels=all .width=20/40/80mhz configuration.country=\
     Kazakhstan .mode=ap .ssid=MT disabled=no name=wifi_5 \
     security.authentication-types=wpa2-psk,wpa3-psk .disable-pmkid=yes \
-    .encryption=ccmp .ft=yes .ft-mobility-domain=0x1234 .ft-over-ds=no \
-    .ft-preserve-vlanid=no .group-encryption=ccmp .group-key-update=5m \
+    .encryption=ccmp .ft=no .ft-mobility-domain=0x1234 .ft-over-ds=no \
+    .ft-preserve-vlanid=no .group-encryption=ccmp .group-key-update=1h \
     .management-encryption=cmac .management-protection=required .wps=disable
 add configuration.hide-ssid=yes .mode=ap .ssid=MT-Backhaul disabled=no \
     mac-address=4A:A9:8A:97:DF:C7 master-interface=wifi_5 name=\
@@ -178,6 +177,10 @@ add dont-require-permissions=no name=dark_mode owner=ilya policy=\
     \n} else={\r\
     \n    /system leds settings set all-leds-off=never \r\
     \n}"
+/user group
+add comment="IaC: Read-only group for Prometheus exporter" name=monitoring \
+    policy="read,api,!local,!telnet,!ssh,!ftp,!reboot,!write,!policy,!test,!wi\
+    nbox,!password,!web,!sniff,!sensitive,!romon,!rest-api"
 /interface bridge port
 add bridge=bridge interface=ether2
 add bridge=bridge interface=ether3 pvid=10
@@ -238,16 +241,17 @@ add address=10.2.100.1/24 comment="Switch admin access" interface=vlan100_eth \
 /ip cloud
 set update-time=no
 /ip dhcp-server lease
-add address=10.2.10.252 client-id=1:78:9a:18:fd:1f:72 mac-address=\
-    78:9A:18:FD:1F:72 server=dhcp1
 add address=10.2.100.254 client-id=1:d4:1:c3:19:ec:c3 mac-address=\
     D4:01:C3:19:EC:C3 server=dhcp5
 add address=10.2.30.3 client-id=1:50:57:9c:91:50:a7 mac-address=\
     50:57:9C:91:50:A7 server=dhcp3
+add address=10.2.10.249 client-id=1:78:9a:18:fd:1f:6d mac-address=\
+    78:9A:18:FD:1F:6D server=dhcp1
 /ip dhcp-server network
 add address=10.2.10.0/24 dns-server=10.2.10.1 gateway=10.2.10.1
 add address=10.2.20.0/24 dns-server=10.2.20.1 gateway=10.2.20.1
-add address=10.2.30.0/24 gateway=10.2.30.1 ntp-server=10.2.30.1
+add address=10.2.30.0/24 dns-server=10.2.30.1 gateway=10.2.30.1 ntp-server=\
+    10.2.30.1
 add address=10.2.40.0/24 dns-server=\
     94.143.199.235,94.143.199.236,1.1.1.1,8.8.8.8 gateway=10.2.40.1 \
     ntp-server=10.2.40.1
@@ -262,7 +266,7 @@ set allow-remote-requests=yes cache-size=8192KiB doh-max-concurrent-queries=\
 add address=192.168.88.1 name=router.lan type=A
 add address=45.90.28.0 name=dns.nextdns.io type=A
 add address=45.90.30.0 name=dns.nextdns.io type=A
-add address=10.2.10.252 name=extender.lan type=A
+add address=10.2.10.249 name=extender.lan type=A
 add address=10.2.100.254 name=crs.lan type=A
 add address=10.2.30.3 name=printer.lan type=A
 add forward-to=10.99.0.1 match-subdomain=yes name=in.threadnull.dev type=FWD
@@ -340,6 +344,9 @@ add action=accept chain=input comment="IaC: Allow Management from VPN" \
     dst-port=8291,5946 in-interface-list=VPN protocol=tcp
 add action=accept chain=input comment="IaC: Allow MNDP" dst-port=5678 \
     in-interface-list=DISCOVER protocol=udp
+add action=accept chain=input comment=\
+    "IaC: Allow RouterOS API from monitoring VPS" dst-port=8728 \
+    in-interface-list=VPN protocol=tcp src-address=10.99.0.100
 add action=drop chain=input comment="IaC: Drop all other input" log-prefix=\
     Drop_Input_Catchall
 add action=accept chain=forward comment=\
@@ -405,7 +412,7 @@ set ftp disabled=yes
 set telnet disabled=yes
 set www disabled=yes
 set ssh max-sessions=10 port=5946
-set api disabled=yes
+set api address=10.99.0.100/32
 /ip ssh
 set strong-crypto=yes
 /ipv6 firewall filter
@@ -414,8 +421,8 @@ add action=drop chain=forward comment="IaC: Drop all IPv6 in forward"
 add action=drop chain=output comment="IaC: Drop all IPv6 in output"
 /routing bgp connection
 add connect=yes instance=wg-bgp-inst listen=yes local.address=10.99.0.12 \
-    .role=ebgp name=wg-hub output.network=BGP_Export remote.address=10.99.0.1 \
-    .as=65001
+    .role=ebgp name=wg-hub output.default-originate=if-installed .network=\
+    BGP_Export remote.address=10.99.0.1 .as=65001
 /system clock
 set time-zone-name=Asia/Bishkek
 /system ntp client

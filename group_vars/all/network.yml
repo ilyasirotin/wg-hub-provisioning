@@ -158,6 +158,8 @@ services:
       - { proto: tcp, port: 443, from: [sites] }
       - { proto: tcp, port: 9090, from: [sites] }
       - { proto: tcp, port: 5860, from: [sites] }
+    egress:
+      - { proto: tcp, port: 8728, to: sites }   # RouterOS API: mikrotik-exporter scrapes site routers
 
   - name: logs
     ip: 10.99.0.101

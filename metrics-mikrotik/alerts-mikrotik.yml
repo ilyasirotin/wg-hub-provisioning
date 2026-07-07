@@ -1,0 +1,79 @@
+# Alert rules for MikroTik monitoring via mktxp (akpw/mktxp).
+# Drop into /etc/prometheus/rules/ (prometheus.yml already loads
+# /etc/prometheus/rules/*.yml). Delivered through the existing
+# Alertmanager -> Telegram pipeline.
+#
+# Failure semantics: mktxp serves all routers from one /metrics endpoint
+# and has NO per-router up metric - when a router is unreachable its
+# series simply disappear. So:
+#   up{job="mktxp"} == 0  -> the exporter container is down
+#   absent(<series>)      -> that router is unreachable / collection failed
+#
+# Metric names verified against the live endpoint (mktxp v1.2.18):
+#   curl -s 127.0.0.1:49090/metrics | grep '^mktxp_' | cut -d'{' -f1 | sort -u
+
+groups:
+  - name: mikrotik
+    rules:
+      # Router unreachable: WireGuard path, API service, or credentials.
+      - alert: MikrotikRouterDown
+        expr: absent(mktxp_system_uptime{routerboard_name="site-a"})
+        for: 3m
+        labels:
+          severity: critical
+          instance: site-a
+        annotations:
+          summary: "MikroTik site-a is not being collected"
+          description: >-
+            mktxp has no metrics from site-a (10.99.0.11) for more than
+            3 minutes. Check the WireGuard tunnel, the RouterOS API (8728)
+            and docker logs mktxp.
+
+      - alert: MikrotikRouterDown
+        expr: absent(mktxp_system_uptime{routerboard_name="site-b"})
+        for: 3m
+        labels:
+          severity: critical
+          instance: site-b
+        annotations:
+          summary: "MikroTik site-b is not being collected"
+          description: >-
+            mktxp has no metrics from site-b (10.99.0.12) for more than
+            3 minutes. Check the WireGuard tunnel, the RouterOS API (8728)
+            and docker logs mktxp.
+
+      # The exporter itself is down (container stopped/crashed).
+      - alert: MktxpExporterDown
+        expr: up{job="mktxp"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "mktxp exporter is down"
+          description: >-
+            Prometheus cannot scrape mktxp on 127.0.0.1:49090 for more than
+            3 minutes. Check the container: docker ps -a; docker logs mktxp.
+
+      - alert: MikrotikHighCpu
+        expr: mktxp_system_cpu_load{job="mktxp"} > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU on {{ $labels.routerboard_name }}"
+          description: "CPU load above 85% for 10 minutes ({{ $value }}%)."
+
+      - alert: MikrotikLowMemory
+        expr: >-
+          mktxp_system_free_memory{job="mktxp"}
+          / mktxp_system_total_memory{job="mktxp"} < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low free memory on {{ $labels.routerboard_name }}"
+          description: "Less than 10% RAM free for 10 minutes."
+
+      # Note: the routers have a scheduled reboot every 4w2d at 05:00
+      # (Asia/Bishkek). Consider an inhibit rule or a time-based mute in
+      # Alertmanager to avoid a false MikrotikRouterDown alert during it.

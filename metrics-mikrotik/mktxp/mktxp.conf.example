@@ -1,0 +1,100 @@
+# mktxp router entries + collector toggles.
+# Copy to mktxp.conf, set the real password of the RouterOS "prometheus"
+# user (created by ../monitoring-access.rsc), chmod 600.
+# mktxp.conf is gitignored - credentials never go to the repo.
+#
+# Section names ([site-a], [site-b]) become the routerboard_name label in
+# every metric and the router selector in the Grafana dashboard (13679).
+#
+# NOTE: this is the FULL [default] key set of mktxp 1.2.18 - the entry
+# reader accesses keys unconditionally, missing ones break startup or
+# silently disable entries (e.g. a missing "enabled"). Do not trim.
+
+[default]
+    enabled = True          # metrics collection for the device on/off
+    module_only = False     # entry used only as a probe module
+    hostname = localhost    # overridden per router below
+    port = 8728             # RouterOS API
+
+    username = prometheus   # needs 'read' + 'api' policy (monitoring-access.rsc)
+    password = CHANGE_ME
+    credentials_file = ""
+
+    custom_labels = None
+
+    use_ssl = False                 # plain API; traffic never leaves the WG tunnel
+    no_ssl_certificate = False
+    ssl_certificate_verify = False
+    ssl_check_hostname = True
+    ssl_ca_file = ""
+    plaintext_login = True          # required for RouterOS >= 6.43
+
+    # --- collectors, tuned for Grafana dashboard 13679 ---
+    health = True
+    installed_packages = True
+    dhcp = True
+    dhcp_lease = True
+
+    connections = True
+    connection_stats = True
+    connection_stats_destinations = False   # high cardinality - keep off
+
+    interface = True
+    routerboard = True              # RouterBOARD inventory / firmware
+    wireguard_peers = True          # router-side view of the hub tunnel
+    bridge_vlan = True
+
+    route = True
+    pool = True
+    firewall = True
+    neighbor = True
+    address_list = Port_Scanners,Admin_Access,Bogons
+    dns = True
+
+    ipv6_route = False
+    ipv6_pool = False
+    ipv6_firewall = False
+    ipv6_neighbor = False
+    ipv6_address_list = None
+
+    poe = False                     # hAP ax3: PoE-in only; collector noisy
+    monitor = True                  # per-port link state/rate
+    netwatch = False
+    public_ip = True
+    wireless = True                 # ROS7 wifi: auto-detects /interface/wifi
+    wireless_clients = True
+    capsman = False                 # no CAPsMAN in use
+    capsman_clients = False
+    w60g = False
+
+    eoip = False
+    gre = False
+    ipip = False
+    lte = False
+    ipsec = False
+    switch_port = True
+
+    kid_control_assigned = False
+    kid_control_dynamic = False
+
+    user = True                     # active RouterOS sessions
+    queue = True
+
+    bfd = False
+    bgp = True                      # session to the hub (exit election machinery)
+    routing_stats = True
+    certificate = False
+
+    container = True                # RouterOS containers (pihole etc. on site-a)
+
+    remote_dhcp_entry = None
+    remote_capsman_entry = None
+
+    interface_name_format = name
+    check_for_updates = False
+
+[site-a]
+    hostname = 10.99.0.11
+
+[site-b]
+    hostname = 10.99.0.12

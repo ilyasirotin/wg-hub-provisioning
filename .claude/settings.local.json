@@ -10,15 +10,17 @@
       "Bash(bash /home/ilia/Projects/wg-infra/scripts/smoke.sh lint 2>&1)",
       "Bash(bash /home/ilia/Projects/wg-infra/scripts/smoke.sh all 2>&1)",
       "Bash(grep *)",
-      "Bash(xargs ls -la)"
+      "Bash(xargs ls -la)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
-  },
-  "sandbox": {
-    "enabled": true,
-    "autoAllowBashIfSandboxed": false
   },
   "enabledMcpjsonServers": [
     "ssh-server",
     "jetbrains-ide"
-  ]
+  ],
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": false
+  }
 }

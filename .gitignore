@@ -15,6 +15,9 @@ __pycache__/
 *.priv
 *.psk
 
+# MikroTik exporter credentials — only mktxp.conf.example goes to git
+metrics-mikrotik/mktxp/mktxp.conf
+
 # IDE
 .idea/
 .vscode/

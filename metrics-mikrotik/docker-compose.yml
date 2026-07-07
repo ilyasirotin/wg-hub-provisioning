@@ -1,0 +1,33 @@
+# mktxp (akpw/mktxp) deployment on the monitoring VPS.
+#
+# Host networking is deliberate, not a convenience:
+#   - Prometheus/Grafana/Alertmanager run on the host (systemd/Debian
+#     packages), not in Docker, so there is no shared Docker network to join.
+#   - The VPS firewall (nftables, rendered by the vpn_member role) has a
+#     default-drop forward chain with no Docker allowances, so containers on
+#     bridge networks have NO outbound connectivity on this host. Host
+#     networking bypasses the forward chain (traffic is host-originated).
+#   - Ansible re-runs flush the nftables ruleset, wiping the NAT rules Docker
+#     maintains for bridge networks until dockerd restarts. Host networking
+#     is immune to that as well.
+#   - Outbound traffic to the routers leaves wg0 with source 10.99.0.100,
+#     matching the address restriction on the RouterOS side.
+#
+# The exporter binds 127.0.0.1:49090 (set in mktxp/_mktxp.conf); Prometheus
+# scrapes http://127.0.0.1:49090. Never expose 49090 beyond localhost: the
+# /metrics endpoint is unauthenticated.
+
+services:
+  mktxp:
+    image: ghcr.io/akpw/mktxp:1.2.18
+    container_name: mktxp
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      # mktxp.conf (routers + credentials) and _mktxp.conf (exporter
+      # settings). The image runs plain "mktxp export", which reads
+      # ~/mktxp of the container user - NOT /etc/mktxp as the upstream
+      # README suggests. NOT :ro - mktxp rewrites its config files on
+      # startup (fills in missing defaults), so the dir must be writable
+      # by the container user (uid 1000 = ops on the VPS).
+      - ./mktxp:/home/mktxp/mktxp
