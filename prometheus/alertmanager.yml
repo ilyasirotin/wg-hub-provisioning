@@ -19,6 +19,15 @@ route:
   group_interval: 1m
   repeat_interval: 24h
   routes:
+    # MikroTik monitoring (routers/extender/switch) goes to a dedicated
+    # bot (same chat, different sender). Must be FIRST: mikrotik alerts
+    # carry severity labels too and would otherwise match the routes below.
+    - matchers: ['component="mikrotik"']
+      receiver: telegram-mikrotik
+      routes:
+        - matchers: ['severity="critical"']
+          group_wait: 5s
+          repeat_interval: 4h
     # One-shot events (client connect/disconnect, exit switch, reboots):
     # separate message per entity, fast delivery.
     - matchers: ['event="true"']
@@ -34,6 +43,14 @@ receivers:
   - name: telegram
     telegram_configs:
       - bot_token_file: /etc/prometheus/telegram_bot_token
+        chat_id: 0  # CHANGE ME: numeric chat id from getUpdates
+        parse_mode: HTML
+        message: '{{ template "telegram.message" . }}'
+        send_resolved: false
+
+  - name: telegram-mikrotik
+    telegram_configs:
+      - bot_token_file: /etc/prometheus/telegram_bot_token_mikrotik
         chat_id: 0  # CHANGE ME: numeric chat id from getUpdates
         parse_mode: HTML
         message: '{{ template "telegram.message" . }}'

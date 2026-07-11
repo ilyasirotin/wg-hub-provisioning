@@ -12,6 +12,27 @@
 #                            alerts-mikrotik.yml
 
 scrape_configs:
+  # CRS-326 switch (SwOS) via snmp_exporter, multi-target pattern.
+  # SwOS supports plain SNMP (community public); access is restricted to
+  # the metrics VPS by the hub ACL (udp/161 egress) anyway.
+  - job_name: snmp-swos
+    scrape_interval: 60s
+    scrape_timeout: 30s
+    metrics_path: /snmp
+    params:
+      module: [if_mib, mikrotik, system]
+      auth: [public_v2]
+    static_configs:
+      - targets:
+          - 10.2.100.254
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 127.0.0.1:9116
+
   - job_name: mktxp
     # A full two-router collection takes ~15-20s (site-b is remote, higher
     # RTT) - keep the interval/timeout above mktxp's own budgets

@@ -49,14 +49,46 @@ wg 10.99.0.11, AS 65011                   wg 10.99.0.12, AS 65012
 
 ```
 monitoring-access.rsc     # RouterOS config - ALREADY APPLIED on both routers
-docker-compose.yml        # mktxp container (host networking)
+docker-compose.yml        # mktxp + snmp-exporter containers (host networking)
 mktxp/_mktxp.conf         # exporter settings (listen 127.0.0.1:49090)
 mktxp/mktxp.conf.example  # routers + collector toggles (template)
 mktxp/mktxp.conf          # real credentials - GITIGNORED, lives locally/on VPS
-scrape-mikrotik.yml       # scrape job to merge into /etc/prometheus/prometheus.yml
+scrape-mikrotik.yml       # scrape jobs (mktxp + snmp-swos) for prometheus.yml
 alerts-mikrotik.yml       # alert rules -> /etc/prometheus/rules/
-../grafana/mikrotik-mktxp-dashboard.json  # dashboard 13679 (as-code copy)
+../grafana/mikrotik-mktxp-dashboard.json  # dashboard 13679 + custom BGP row
+../grafana/mikrotik-swos-dashboard.json   # dashboard 14933, job patched to snmp-swos
 ```
+
+## CRS-326 switch (SwOS) - SNMP
+
+SwOS has no API; metrics come via `snmp-exporter` (same compose file,
+host networking, `127.0.0.1:9116`, bundled `snmp.yml`). Prometheus job
+`snmp-swos` probes `10.2.100.254` with modules `if_mib` (port counters),
+`mikrotik` (mtxr health/optics) and `system` (sysUpTime), auth `public_v2`
+(SwOS v2.18 speaks SNMPv2c, 64-bit counters verified). Path: hub egress
+`udp/161 -> sites` in `network.yml`. On the switch: SwOS UI -> System ->
+SNMP: Enabled, community `public`. `SwosSwitchDown` alert fires while the
+target is down. Debug note: SNMP silently drops requests with a wrong
+community - from the exporter it looks exactly like a timeout.
+
+## Telegram: dedicated MikroTik bot
+
+All rules here carry `component: mikrotik`; Alertmanager (canonical copy
+`../prometheus/alertmanager.yml`) routes them to the `telegram-mikrotik`
+receiver - same chat, separate bot. The token lives ONLY on the VPS in
+`/etc/prometheus/telegram_bot_token_mikrotik` (600, prometheus:prometheus);
+after changing it: `sudo systemctl reload prometheus-alertmanager`.
+
+## hAP ax2 extender
+
+L2 extender behind site_b, `10.2.10.249` (vlan10, DHCP reservation).
+Reached directly over the overlay: hub allows `8728 -> @site_nets`, site_b
+forwards VPN -> TRUSTED_LAN. Onboarded 2026-07-08:
+`monitoring-access-extender.rsc` applied on the device (user + API binding;
+the device has no firewall), `[extender]` section in `mktxp.conf` with the
+L2 collector subset (interface/monitor/wireless/health; no dhcp/route/
+firewall/bgp), `max_worker_threads = 3`. Appears on the mktxp dashboard as
+`extender` and has its own `MikrotikRouterDown` absent-rule.
 
 ## Deployment (already done on the VPS; for reference / redeploy)
 

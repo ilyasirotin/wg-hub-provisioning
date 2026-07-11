@@ -20,6 +20,7 @@ groups:
         expr: absent(mktxp_system_uptime{routerboard_name="site-a"})
         for: 3m
         labels:
+          component: mikrotik
           severity: critical
           instance: site-a
         annotations:
@@ -33,6 +34,7 @@ groups:
         expr: absent(mktxp_system_uptime{routerboard_name="site-b"})
         for: 3m
         labels:
+          component: mikrotik
           severity: critical
           instance: site-b
         annotations:
@@ -42,11 +44,26 @@ groups:
             3 minutes. Check the WireGuard tunnel, the RouterOS API (8728)
             and docker logs mktxp.
 
+      - alert: MikrotikRouterDown
+        expr: absent(mktxp_system_uptime{routerboard_name="extender"})
+        for: 3m
+        labels:
+          component: mikrotik
+          severity: critical
+          instance: extender
+        annotations:
+          summary: "MikroTik extender is not being collected"
+          description: >-
+            mktxp has no metrics from the extender (10.2.10.249) for more
+            than 3 minutes. Check the path (hub -> site_b -> vlan10), the
+            RouterOS API (8728) and docker logs mktxp.
+
       # The exporter itself is down (container stopped/crashed).
       - alert: MktxpExporterDown
         expr: up{job="mktxp"} == 0
         for: 3m
         labels:
+          component: mikrotik
           severity: critical
         annotations:
           summary: "mktxp exporter is down"
@@ -58,6 +75,7 @@ groups:
         expr: mktxp_system_cpu_load{job="mktxp"} > 85
         for: 10m
         labels:
+          component: mikrotik
           severity: warning
         annotations:
           summary: "High CPU on {{ $labels.routerboard_name }}"
@@ -69,6 +87,7 @@ groups:
           / mktxp_system_total_memory{job="mktxp"} < 0.10
         for: 10m
         labels:
+          component: mikrotik
           severity: warning
         annotations:
           summary: "Low free memory on {{ $labels.routerboard_name }}"
@@ -77,3 +96,18 @@ groups:
       # Note: the routers have a scheduled reboot every 4w2d at 05:00
       # (Asia/Bishkek). Consider an inhibit rule or a time-based mute in
       # Alertmanager to avoid a false MikrotikRouterDown alert during it.
+
+      # CRS-326 switch (SwOS) via snmp_exporter: on SNMP failure the
+      # exporter returns an HTTP error, so up goes to 0 for the target.
+      - alert: SwosSwitchDown
+        expr: up{job="snmp-swos"} == 0
+        for: 3m
+        labels:
+          component: mikrotik
+          severity: critical
+        annotations:
+          summary: "CRS-326 switch (SwOS) SNMP down"
+          description: >-
+            snmp_exporter cannot walk 10.2.100.254 for more than 3 minutes.
+            Check the switch, SNMP service in SwOS, and the path through
+            the hub (udp/161).

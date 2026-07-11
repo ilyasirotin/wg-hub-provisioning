@@ -98,3 +98,25 @@
 
 [site-b]
     hostname = 10.99.0.12
+
+# L2 extender behind site_b (monitoring-access-extender.rsc applied 2026-07-08).
+[extender]
+    hostname = 10.2.10.249
+    enabled = True
+    # pure L2 device: no routing/firewall/dhcp-server/BGP to collect
+    dhcp = False
+    dhcp_lease = False
+    connections = False
+    connection_stats = False
+    route = False
+    pool = False
+    firewall = False
+    address_list = None
+    dns = False
+    public_ip = False
+    bgp = False
+    routing_stats = False
+    switch_port = False
+    container = False
+    queue = False
+    wireguard_peers = False

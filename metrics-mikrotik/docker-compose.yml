@@ -18,6 +18,21 @@
 # /metrics endpoint is unauthenticated.
 
 services:
+  # SNMP scraper for the CRS-326 switch (SwOS, 10.2.100.254) - SwOS has no
+  # API, SNMP only. Uses the bundled snmp.yml (if_mib module, public
+  # community). Same host-networking rationale as mktxp below.
+  snmp-exporter:
+    image: prom/snmp-exporter:v0.30.0
+    container_name: snmp-exporter
+    restart: unless-stopped
+    network_mode: host
+    command:
+      # command overrides the image CMD entirely - the config path must be
+      # repeated here (bundled snmp.yml: if_mib module, public_v1/v2 auth)
+      - '--config.file=/etc/snmp_exporter/snmp.yml'
+      # /snmp is unauthenticated - bind loopback only
+      - '--web.listen-address=127.0.0.1:9116'
+
   mktxp:
     image: ghcr.io/akpw/mktxp:1.2.18
     container_name: mktxp

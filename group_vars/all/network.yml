@@ -159,7 +159,8 @@ services:
       - { proto: tcp, port: 9090, from: [sites] }
       - { proto: tcp, port: 5860, from: [sites] }
     egress:
-      - { proto: tcp, port: 8728, to: sites }   # RouterOS API: mikrotik-exporter scrapes site routers
+      - { proto: tcp, port: 8728, to: sites }   # RouterOS API: mktxp scrapes site routers + extender
+      - { proto: udp, port: 161, to: sites }    # SNMP: snmp_exporter scrapes the CRS-326 switch (SwOS)
 
   - name: logs
     ip: 10.99.0.101
