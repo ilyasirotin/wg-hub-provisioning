@@ -429,7 +429,7 @@
       "targets": [
         {
           "exemplar": true,
-          "expr": "sum(irate(ifInErrors{ifName=~'$Interface',instance='$instance'}[20s]))",
+          "expr": "sum(irate(ifInErrors{ifName=~'$Interface',instance='$instance'}[$__rate_interval]))",
           "format": "time_series",
           "hide": false,
           "instant": false,
@@ -439,7 +439,7 @@
         },
         {
           "exemplar": true,
-          "expr": "sum(irate(ifOutErrors{ifName=~'$Interface',instance='$instance'}[20s]))",
+          "expr": "sum(irate(ifOutErrors{ifName=~'$Interface',instance='$instance'}[$__rate_interval]))",
           "format": "time_series",
           "instant": false,
           "interval": "",
@@ -1575,7 +1575,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "irate(ifHCInOctets{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])*8",
+              "expr": "irate(ifHCInOctets{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])*8",
               "format": "time_series",
               "interval": "",
               "legendFormat": "{{ifName}}",
@@ -1680,7 +1680,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "irate(ifHCOutOctets{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])*8",
+              "expr": "irate(ifHCOutOctets{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])*8",
               "format": "time_series",
               "interval": "",
               "legendFormat": "{{ifName}}",
@@ -1916,7 +1916,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "irate(ifHCInOctets{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])*8",
+              "expr": "irate(ifHCInOctets{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])*8",
               "format": "time_series",
               "instant": false,
               "interval": "",
@@ -1926,7 +1926,7 @@
             },
             {
               "exemplar": true,
-              "expr": "-(irate(ifHCOutOctets{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])*8)",
+              "expr": "-(irate(ifHCOutOctets{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])*8)",
               "format": "time_series",
               "instant": false,
               "interval": "",
@@ -1995,7 +1995,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "irate(ifInBroadcastPkts{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])",
+              "expr": "irate(ifInBroadcastPkts{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])",
               "instant": false,
               "interval": "",
               "legendFormat": "Broadcast",
@@ -2003,7 +2003,7 @@
             },
             {
               "exemplar": true,
-              "expr": "irate(ifInMulticastPkts{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])",
+              "expr": "irate(ifInMulticastPkts{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "Multicast",
@@ -2011,7 +2011,7 @@
             },
             {
               "exemplar": true,
-              "expr": "irate(ifInUcastPkts{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])",
+              "expr": "irate(ifInUcastPkts{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "Unicast",
@@ -2019,7 +2019,7 @@
             },
             {
               "exemplar": true,
-              "expr": "irate(ifInDiscards{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])",
+              "expr": "irate(ifInDiscards{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "Discards",
@@ -2027,7 +2027,7 @@
             },
             {
               "exemplar": true,
-              "expr": "irate(ifInErrors{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])",
+              "expr": "irate(ifInErrors{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "Errors",
@@ -2092,7 +2092,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "irate(ifOutBroadcastPkts{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])",
+              "expr": "irate(ifOutBroadcastPkts{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])",
               "instant": false,
               "interval": "",
               "legendFormat": "Broadcast",
@@ -2100,7 +2100,7 @@
             },
             {
               "exemplar": true,
-              "expr": "irate(ifOutMulticastPkts{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])",
+              "expr": "irate(ifOutMulticastPkts{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "Multicast",
@@ -2108,7 +2108,7 @@
             },
             {
               "exemplar": true,
-              "expr": "irate(ifOutUcastPkts{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])",
+              "expr": "irate(ifOutUcastPkts{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "Unicast",
@@ -2116,7 +2116,7 @@
             },
             {
               "exemplar": true,
-              "expr": "irate(ifOutDiscards{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])",
+              "expr": "irate(ifOutDiscards{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "Discards",
@@ -2124,7 +2124,7 @@
             },
             {
               "exemplar": true,
-              "expr": "irate(ifOutErrors{job='snmp',ifName=~'$Interface',instance='$instance'}[20s])",
+              "expr": "irate(ifOutErrors{job='snmp-swos',ifName=~'$Interface',instance='$instance'}[$__rate_interval])",
               "hide": false,
               "interval": "",
               "legendFormat": "Errors",
