@@ -1,0 +1,87 @@
+# Central logging stack (ELK) on the logs VPS (WireGuard peer, wg 10.99.0.101).
+#
+# HOST NETWORKING is deliberate, exactly like metrics-mikrotik/docker-compose.yml:
+#   - The VPS firewall (nftables, rendered by the vpn_member role) has a
+#     default-drop FORWARD chain with no Docker allowances, so containers on
+#     bridge networks have NO outbound connectivity on this host.
+#   - Ansible re-runs `flush ruleset`, wiping the NAT/forward rules Docker
+#     maintains for bridge networks until dockerd restarts. Host networking is
+#     immune: its traffic is host-originated / host-received.
+#   - Fluent Bit must receive router syslog on wg0 (udp/514) and Elasticsearch
+#     must be reachable from the metrics VPS on 10.99.0.101:9200 — both are
+#     host-interface bindings gated by nftables (see group_vars/all/network.yml
+#     service "logs": udp/514 from sites, tcp/9200 from services).
+#
+# Access control is the overlay + hub ACL + this host's member nftables. HTTP
+# TLS on Elasticsearch is intentionally OFF (xpack.security.http.ssl.enabled=
+# false): all traffic already rides inside WireGuard, so we keep basic-auth
+# passwords but skip the internal-CA/cert plumbing. Kibana is the only
+# externally reachable UI and it is fronted by nginx TLS (wildcard cert) on 443.
+#
+# Secrets come from .env (chmod 600, gitignored). See .env.example.
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: elasticsearch
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - node.name=logs-es01
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false      # traffic is inside WireGuard
+      - xpack.security.transport.ssl.enabled=false # single-node, transport is loopback
+      - xpack.license.self_generated.type=basic
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - network.host=0.0.0.0                        # bind wg0 + loopback; nftables gates 9200
+      - http.port=9200
+      - bootstrap.memory_lock=true
+      # Heap: ~half of the 8 GB VPS, leaving room for OS page cache + Kibana.
+      - "ES_JAVA_OPTS=-Xms3g -Xmx3g"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile:  { soft: 65536, hard: 65536 }
+    volumes:
+      - ./esdata:/usr/share/elasticsearch/data       # chown 1000:0 before first start
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -u elastic:$$ELASTIC_PASSWORD http://localhost:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.3
+    container_name: kibana
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      # server.host=127.0.0.1 -> Kibana listens on loopback only; nginx (host)
+      # reverse-proxies https://logs.in.threadnull.dev -> 127.0.0.1:5601.
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - XPACK_SECURITY_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - XPACK_REPORTING_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+    volumes:
+      - ./kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  fluent-bit:
+    image: fluent/fluent-bit:3.1.9
+    container_name: fluent-bit
+    restart: unless-stopped
+    network_mode: host                                # bind udp/514 on wg0, push to localhost:9200
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    volumes:
+      - ./fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+      # journald ingest (host + all containers via the journald log-driver):
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy

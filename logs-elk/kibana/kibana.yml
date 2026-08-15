@@ -1,0 +1,17 @@
+# Kibana on the logs VPS. Listens on loopback only; nginx (rendered by the
+# vpn_member role) terminates TLS on 10.99.0.101:443 with the wildcard cert
+# and reverse-proxies to 127.0.0.1:5601.
+#
+# Secrets are injected via environment (docker-compose .env), NOT here:
+#   ELASTICSEARCH_PASSWORD              -> kibana_system password
+#   XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY / *_SECURITY_* / *_REPORTING_*
+
+server.host: "127.0.0.1"
+server.port: 5601
+server.publicBaseUrl: "https://logs.in.threadnull.dev"
+
+elasticsearch.hosts: ["http://localhost:9200"]
+elasticsearch.username: "kibana_system"
+
+# Quieter startup logs; bump to debug when troubleshooting.
+logging.root.level: warn

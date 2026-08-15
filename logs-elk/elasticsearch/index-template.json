@@ -1,0 +1,37 @@
+{
+  "index_patterns": ["logs-*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.refresh_interval": "5s",
+      "index.lifecycle.name": "logs-180d"
+    },
+    "mappings": {
+      "dynamic_templates": [
+        {
+          "strings_as_keyword": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp":  { "type": "date" },
+        "message":     { "type": "text" },
+        "log_source":  { "type": "keyword" },
+        "host":        { "type": "keyword" },
+        "HOSTNAME":    { "type": "keyword" },
+        "SYSTEMD_UNIT":   { "type": "keyword" },
+        "CONTAINER_NAME": { "type": "keyword" },
+        "ident":       { "type": "keyword" },
+        "pri":         { "type": "keyword" },
+        "level":       { "type": "keyword" }
+      }
+    }
+  }
+}

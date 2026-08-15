@@ -1,0 +1,35 @@
+# Grafana datasource provisioning for the central logs Elasticsearch.
+# Deploy on the METRICS VPS (host-based Grafana), not the logs VPS:
+#   /etc/grafana/provisioning/datasources/elasticsearch-logs.yml
+#   systemctl reload grafana-server
+#
+# The password is read from the environment ($ES_LOGS_PASSWORD) so it is NOT
+# committed to git. Set it for the grafana-server process, e.g. via a drop-in:
+#   /etc/systemd/system/grafana-server.service.d/es-logs.conf
+#     [Service]
+#     Environment=ES_LOGS_PASSWORD=<the ELASTIC_PASSWORD from logs VPS .env>
+#   systemctl daemon-reload && systemctl restart grafana-server
+#
+# Grafana reaches ES over the overlay at 10.99.0.101:9200; the hub permits this
+# via `tcp/9200 from services` (network.yml). Queries here use Lucene syntax
+# (DQL lives in Kibana).
+
+apiVersion: 1
+
+datasources:
+  - name: Elasticsearch-logs
+    uid: es-logs
+    type: elasticsearch
+    access: proxy
+    url: http://10.99.0.101:9200
+    basicAuth: true
+    basicAuthUser: elastic
+    jsonData:
+      index: "logs-*"
+      timeField: "@timestamp"
+      logMessageField: message
+      logLevelField: level
+      maxConcurrentShardRequests: 5
+    secureJsonData:
+      basicAuthPassword: $ES_LOGS_PASSWORD
+    editable: false

@@ -164,9 +164,11 @@ services:
 
   - name: logs
     ip: 10.99.0.101
-    dns_names: [logs]
+    dns_names: [logs, kibana]
     nginx: true
-    nginx_upstream: 127.0.0.1:8080
+    nginx_upstream: 127.0.0.1:5601              # Kibana (ELK stack, see logs-elk/)
     ingress:
-      - { proto: tcp, port: 443, from: [sites] }
-      - { proto: tcp, port: 5860, from: [sites] }
+      - { proto: udp, port: 514, from: [sites] }     # remote syslog: site_a/site_b routers + extender
+      - { proto: tcp, port: 9200, from: [services] }  # Elasticsearch API: Grafana(metrics) queries + Fluent Bit shippers
+      - { proto: tcp, port: 443, from: [admin] }     # Kibana UI (admins only; implicit hub accept opens the flow, member nft opens the port)
+      - { proto: tcp, port: 5860, from: [sites] }    # SSH management from site networks (as on the metrics service)
