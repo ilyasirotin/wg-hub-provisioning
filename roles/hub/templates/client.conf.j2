@@ -1,0 +1,14 @@
+# Managed by Ansible. Peer {{ item.name }} ({{ item.address }}).
+# Split tunnel: AllowedIPs lists private ranges only. This hub carries no
+# internet traffic - a 0.0.0.0/0 here would black-hole the device.
+[Interface]
+PrivateKey = {{ hub_peer_keys[item.name]['priv'] }}
+Address = {{ item.address }}/{{ wg_network.split('/')[1] }}
+DNS = {{ hub_overlay_ip }}
+
+[Peer]
+PublicKey = {{ hub_keys['wg0.pub'] }}
+PresharedKey = {{ hub_peer_keys[item.name]['psk'] }}
+Endpoint = {{ hub_public_endpoint }}:{{ wg_port }}
+AllowedIPs = {{ ([wg_network] + peers | selectattr('lan_supernet', 'defined') | map(attribute='lan_supernet') | list) | join(', ') }}
+PersistentKeepalive = 25

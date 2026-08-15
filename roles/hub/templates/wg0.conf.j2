@@ -1,0 +1,19 @@
+# Managed by Ansible. Do not edit manually.
+# Table = off: routes are managed by wg0-routes.service, not wg-quick.
+# This allows peer changes to be applied with 'wg syncconf' without
+# restarting the interface and dropping every active session.
+[Interface]
+Address = {{ hub_overlay_ip }}/{{ wg_network.split('/')[1] }}
+ListenPort = {{ wg_port }}
+PrivateKey = {{ hub_keys['wg0.priv'] }}
+Table = off
+{% for peer in peers %}
+
+# {{ peer.name }}
+[Peer]
+PublicKey = {{ hub_peer_keys[peer.name]['pub'] }}
+PresharedKey = {{ hub_peer_keys[peer.name]['psk'] }}
+{# No Endpoint for any peer: the hub learns them from handshakes. #}
+AllowedIPs = {{ peer.address }}/32{% if peer.lan_supernet is defined %}, {{ peer.lan_supernet }}{% endif %}
+
+{% endfor %}

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Managed by Ansible. Routes for {{ wg_interface }}, kept out of wg-quick
+# (Table = off) so peer changes apply with `wg syncconf` without
+# restarting the interface.
+set -eu
+
+IFACE="{{ wg_interface }}"
+ACTION="${1:-up}"
+
+route() {
+  local op="$1"; shift
+  if [ "$op" = add ]; then ip route replace "$@"; else ip route del "$@" 2>/dev/null || true; fi
+}
+
+if [ "$ACTION" = up ]; then OP=add; else OP=del; fi
+
+# Overlay subnet
+route "$OP" {{ wg_network }} dev "$IFACE"
+
+# Site LAN supernets (static; no dynamic routing protocol in use).
+# Each LAN has exactly one path - through its own site router - so there
+# is nothing to fail over to and nothing to elect.
+{% for peer in peers if peer.lan_supernet is defined %}
+route "$OP" {{ peer.lan_supernet }} via {{ peer.address }} dev "$IFACE"
+{% endfor %}
+
+exit 0

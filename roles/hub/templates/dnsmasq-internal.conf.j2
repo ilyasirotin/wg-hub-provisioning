@@ -1,0 +1,27 @@
+# Managed by Ansible. Authoritative for {{ wg_domain }}, forwards the rest.
+listen-address={{ hub_overlay_ip }}
+bind-dynamic
+no-resolv
+strict-order
+domain-needed
+bogus-priv
+cache-size=2000
+
+# NextDNS profile ID - sent as an EDNS0 option, no Linked IP needed.
+# Applies to every upstream query, including the Cloudflare fallback below.
+add-cpe-id={{ nextdns_profile_id }}
+
+# IPv4 first: with strict-order dnsmasq queries upstreams in this exact
+# order, and unreachable IPv6 servers would stall every lookup on a
+# droplet without IPv6. Add the v6 entries only if IPv6 is enabled.
+{% for s in dns_upstreams %}
+server={{ s }}
+{% endfor %}
+
+# Authoritative zone - never forwarded upstream
+local=/{{ wg_domain }}/
+
+host-record=hub.{{ wg_domain }},{{ hub_overlay_ip }}
+{% for peer in peers %}
+host-record={{ peer.dns_name | default(peer.name | replace('_', '-')) }}.{{ wg_domain }},{{ peer.address }}
+{% endfor %}

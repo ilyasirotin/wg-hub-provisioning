@@ -1,0 +1,12 @@
+# Only the Ansible project itself is linted. The other top-level
+# directories hold configuration for machines this repository does not
+# provision (Prometheus rules, Grafana dashboards, the ELK stack,
+# MikroTik exports) and are not Ansible content.
+exclude_paths:
+  - .venv/
+  - .ansible/
+  - grafana/
+  - logs-elk/
+  - metrics-mikrotik/
+  - prometheus/
+  - routeros/

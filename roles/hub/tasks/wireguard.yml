@@ -1,0 +1,72 @@
+---
+# The interface, its routes, and the per-peer artefacts. Peer changes are
+# applied with `wg syncconf`, never by restarting the interface.
+- name: Deploy wg0.conf
+  ansible.builtin.template:
+    src: wg0.conf.j2
+    dest: "/etc/wireguard/{{ wg_interface }}.conf"
+    mode: "0600"
+    validate: wg-quick strip %s
+  notify: Sync WireGuard peers
+
+- name: Deploy the routing script
+  ansible.builtin.template:
+    src: wg0-routes.sh.j2
+    dest: /usr/local/sbin/wg0-routes.sh
+    mode: "0755"
+  notify: Restart wg0-routes
+
+# BindsTo= withdraws the routes automatically if WireGuard goes away, so
+# nothing points at a dead interface.
+- name: Deploy the wg0-routes unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/wg0-routes.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Routing entries for {{ wg_interface }}
+      After=network-online.target
+      After=wg-quick@{{ wg_interface }}.service
+      BindsTo=wg-quick@{{ wg_interface }}.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/wg0-routes.sh up
+      ExecStop=/usr/local/sbin/wg0-routes.sh down
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart wg0-routes
+
+- name: Render client configs
+  ansible.builtin.template:
+    src: client.conf.j2
+    dest: "/etc/wireguard/peers/{{ item.name }}.conf"
+    mode: "0600"
+  loop: "{{ peers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Render MikroTik snippets for peers with a LAN
+  ansible.builtin.template:
+    src: mikrotik-site.rsc.j2
+    dest: "/etc/wireguard/peers/{{ item.name }}.rsc"
+    mode: "0600"
+  loop: "{{ peers | selectattr('lan_supernet', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Enable and start WireGuard and its routes
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop:
+    - "wg-quick@{{ wg_interface }}"
+    - wg0-routes

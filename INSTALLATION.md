@@ -1,104 +1,77 @@
-# Ручная установка хаба
+# Хаб на Debian 13 (DigitalOcean, Amsterdam)
 
-Пошаговое руководство по поднятию хаба без Ansible. Каждый блок соответствует
-конкретной задаче из плейбука, поэтому его удобно читать параллельно с кодом
-ролей (`roles/base_hardening`, `roles/wg_hub`, `roles/certs_hub`).
+Ручная установка, без Ansible. Каждый шаг выполняется по SSH на droplet'е.
 
-**Модель сети** (из `group_vars/all/network.yml`):
-- Overlay: `10.99.0.0/24`, интерфейс `wg0`, порт UDP `51820`
-- Hub: `10.99.0.1`, публичный IP `65.21.177.182`
-- SSH-порт после hardening: `5860`
-- Домен: `in.threadnull.dev`
+## 0. Модель сети
 
----
+Единственный интерфейс `wg0` — приватный оверлей. Клиентского VPN и выхода
+в интернет через хаб нет: пиры используют туннель только для доступа к
+оверлею, LAN сайтов и сервисным VPS, а в интернет ходят через свои
+собственные подключения.
 
-## Шаг 0 — Создание служебного пользователя
+| Параметр | Значение |
+|---|---|
+| Интерфейс | `wg0`, `10.99.0.0/24`, UDP `51820` |
+| Хаб | `10.99.0.1` |
+| site_a | `10.99.0.11`, LAN `10.1.0.0/16` |
+| site_b | `10.99.0.12`, LAN `10.2.0.0/16` |
+| Сервисные VPS | `10.99.0.100–199` |
+| Устройства | `10.99.0.20–99` |
+| Домен | `in.threadnull.dev` |
+| SSH | порт `22`, снаружи закрыт через DO Cloud Firewall |
+| Droplet | Debian 13, 1 vCPU / 1 GB RAM, AMS3 |
 
-Выполняется один раз на свежем сервере от root.
-
-```bash
-adduser wg
-usermod -aG sudo wg
-mkdir -p /home/wg/.ssh
-cp ~/.ssh/authorized_keys /home/wg/.ssh/
-chown -R wg:wg /home/wg/.ssh
-chmod 700 /home/wg/.ssh
-chmod 600 /home/wg/.ssh/authorized_keys
-echo 'wg ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/wg
-chmod 0440 /etc/sudoers.d/wg
-```
-
-После этого подключаться только как `wg`:
-```bash
-ssh -p 22 wg@65.21.177.182
-```
+Без BGP, без FRR, без PBR. Маршруты к LAN сайтов — статические. NAT на
+хабе не нужен вообще: транзитного интернет-трафика через него не проходит.
 
 ---
 
-## Шаг 1 — Базовое усиление (роль `base_hardening`)
+## 1. Создание droplet
 
-### 1.1 Обновление и установка пакетов
+**Create → Droplets → Debian 13**, регион **AMS3**, размер 1 vCPU / 1 GB
+(Basic). Добавить SSH-ключ — на штатном образе Debian cloud-init подхватит
+его сразу, веб-консоль не понадобится.
+
+```bash
+ssh root@<публичный-IP>
+```
+
+Cloud Firewall пока не создаём — понадобится SSH снаружи, пока не поднят
+WireGuard.
+
+---
+
+## 2. Служебный пользователь
+
+```bash
+adduser ops
+usermod -aG sudo ops
+mkdir -p /home/ops/.ssh
+cp ~/.ssh/authorized_keys /home/ops/.ssh/
+chown -R ops:ops /home/ops/.ssh
+chmod 700 /home/ops/.ssh
+chmod 600 /home/ops/.ssh/authorized_keys
+echo 'ops ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ops
+chmod 0440 /etc/sudoers.d/ops
+```
+
+Переподключиться как `ops` и убедиться, что `sudo` работает, прежде чем
+идти дальше.
+
+---
+
+## 3. Пакеты и базовая настройка
 
 ```bash
 sudo apt update && sudo apt dist-upgrade -y
-sudo apt install -y nftables fail2ban unattended-upgrades qrencode rsync curl
+sudo apt install -y wireguard nftables dnsmasq qrencode curl \
+                    prometheus-node-exporter unattended-upgrades
+
+sudo apt purge -y ufw          # конфликтует с прямым управлением nftables
+sudo systemctl enable nftables
 ```
 
-Удалить ufw — он конфликтует с прямым управлением nftables:
-
-```bash
-sudo apt purge -y ufw
-```
-
-### 1.2 Настройка sshd
-
-Перед записью убедитесь, что у вас открыта ещё одна SSH-сессия или вы готовы
-переподключиться на порт `5860`.
-
-```bash
-sudo tee /etc/ssh/sshd_config.d/90-hardening.conf << 'EOF'
-Port 5860
-PermitRootLogin prohibit-password
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-X11Forwarding no
-MaxAuthTries 4
-ClientAliveInterval 120
-ClientAliveCountMax 3
-EOF
-```
-
-Перезапустить sshd (соединение на 22 оборвётся):
-
-```bash
-sudo systemctl restart ssh
-```
-
-Переподключиться:
-```bash
-ssh -p 5860 wg@65.21.177.182
-```
-
-### 1.3 Настройка fail2ban
-
-```bash
-sudo tee /etc/fail2ban/jail.d/sshd.local << 'EOF'
-[DEFAULT]
-banaction = nftables-multiport
-banaction_allports = nftables-allports
-
-[sshd]
-enabled = true
-port = 5860
-maxretry = 5
-bantime = 1h
-EOF
-
-sudo systemctl enable --now fail2ban
-sudo systemctl restart fail2ban
-```
-
-### 1.4 Автоматические обновления безопасности
+Автообновления безопасности:
 
 ```bash
 sudo tee /etc/apt/apt.conf.d/20auto-upgrades << 'EOF'
@@ -107,23 +80,32 @@ APT::Periodic::Unattended-Upgrade "1";
 EOF
 ```
 
-### 1.5 Включить nftables как сервис
+`sshd` остаётся на порту 22 с ключевой аутентификацией — снаружи его
+закроет Cloud Firewall (раздел 10). Стоит явно выключить парольный вход:
 
 ```bash
-sudo systemctl enable nftables
+sudo tee /etc/ssh/sshd_config.d/90-hardening.conf << 'EOF'
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+X11Forwarding no
+EOF
+
+sudo systemctl restart ssh
 ```
+
+`fail2ban` не ставим: SSH недоступен из интернета после раздела 10, а
+внутри оверлея бан по неудачным попыткам только мешает.
 
 ---
 
-## Шаг 2 — WireGuard и маршрутизация (роль `wg_hub`)
+## 4. IP-форвардинг
 
-### 2.1 Установка пакетов
-
-```bash
-sudo apt install -y wireguard dnsmasq
-```
-
-### 2.2 IP-форвардинг
+Критично: при `ip_forward = 0` ядро молча роняет форвардящиеся пакеты
+**до** того, как их увидит nftables. SSH к хабу при этом работает (это
+цепочка INPUT, не FORWARD), поэтому проблема невидима без явной проверки.
+Здесь форвардинг нужен для site-to-site трафика — чтобы пиры одного сайта
+видели LAN другого через хаб.
 
 ```bash
 sudo tee /etc/sysctl.d/99-wg-hub.conf << 'EOF'
@@ -131,138 +113,98 @@ net.ipv4.ip_forward = 1
 EOF
 
 sudo sysctl --system
+sysctl net.ipv4.ip_forward   # должно вернуть 1
 ```
 
-Проверить:
+Префикс `99-` гарантирует, что файл загрузится после всех дистрибутивных
+и выиграет любые конфликты.
+
+---
+
+## 5. Ключи
+
 ```bash
-sysctl net.ipv4.ip_forward  # должно вернуть 1
+sudo mkdir -p /etc/wireguard/peers
+sudo chmod 700 /etc/wireguard /etc/wireguard/peers
 ```
 
-### 2.3 Директории для ключей
+Ключ хаба:
 
 ```bash
-sudo mkdir -p /etc/wireguard/clients
-sudo chmod 700 /etc/wireguard /etc/wireguard/clients
+(umask 077; wg genkey | sudo tee /etc/wireguard/wg0.priv | \
+   wg pubkey | sudo tee /etc/wireguard/wg0.pub) > /dev/null
+
+sudo cat /etc/wireguard/wg0.pub   # понадобится при настройке пиров
 ```
 
-### 2.4 Генерация ключей сервера
+Ключи пиров — по набору на пира. Скрипт идемпотентен: существующие ключи
+не перезаписываются, поэтому его можно гонять повторно при добавлении
+новых пиров.
 
 ```bash
-(umask 077; wg genkey | sudo tee /etc/wireguard/server.priv | wg pubkey | sudo tee /etc/wireguard/server.pub)
-```
-
-Посмотреть публичный ключ хаба (нужен при настройке роутеров):
-```bash
-sudo cat /etc/wireguard/server.pub
-```
-
-### 2.5 Генерация ключей пиров
-
-Для каждого пира (site_a, site_b, pixel_10_pro_home, pixel_10_pro_cloud) — пара
-ключей и PSK. Флаг `creates:` в Ansible делает это идемпотентным; вручную
-следует не перезаписывать уже существующие ключи.
-
-```bash
-for PEER in site_a site_b pixel_10_pro_home pixel_10_pro_cloud; do
-    PRIV="/etc/wireguard/clients/${PEER}.priv"
-    PUB="/etc/wireguard/clients/${PEER}.pub"
-    PSK="/etc/wireguard/clients/${PEER}.psk"
-
-    if [ ! -f "$PRIV" ]; then
-        (umask 077; wg genkey | sudo tee "$PRIV" | wg pubkey | sudo tee "$PUB") > /dev/null
-        (umask 077; wg genpsk | sudo tee "$PSK") > /dev/null
-        echo "Сгенерированы ключи для $PEER"
-    else
-        echo "Ключи для $PEER уже существуют — пропускаем"
-    fi
+for PEER in site_a site_b; do
+  PRIV="/etc/wireguard/peers/${PEER}.priv"
+  if [ ! -f "$PRIV" ]; then
+    (umask 077; wg genkey | sudo tee "$PRIV" | \
+       wg pubkey | sudo tee "/etc/wireguard/peers/${PEER}.pub") > /dev/null
+    (umask 077; wg genpsk | sudo tee "/etc/wireguard/peers/${PEER}.psk") > /dev/null
+    echo "generated: $PEER"
+  else
+    echo "exists, skipped: $PEER"
+  fi
 done
+
+sudo chmod 600 /etc/wireguard/wg0.priv /etc/wireguard/peers/*.priv \
+               /etc/wireguard/peers/*.psk
 ```
 
-Зафиксировать права:
-```bash
-sudo chmod 600 /etc/wireguard/server.priv \
-               /etc/wireguard/clients/*.priv \
-               /etc/wireguard/clients/*.psk
-```
+---
 
-### 2.6 Конфиг WireGuard (`/etc/wireguard/wg0.conf`)
-
-Читаем все ключи — они понадобятся в конфиге:
+## 6. wg0
 
 ```bash
-SERVER_PRIV=$(sudo cat /etc/wireguard/server.priv)
+WG0_PRIV=$(sudo cat /etc/wireguard/wg0.priv)
+SITE_A_PUB=$(sudo cat /etc/wireguard/peers/site_a.pub)
+SITE_A_PSK=$(sudo cat /etc/wireguard/peers/site_a.psk)
+SITE_B_PUB=$(sudo cat /etc/wireguard/peers/site_b.pub)
+SITE_B_PSK=$(sudo cat /etc/wireguard/peers/site_b.psk)
 
-SITE_A_PUB=$(sudo cat /etc/wireguard/clients/site_a.pub)
-SITE_A_PSK=$(sudo cat /etc/wireguard/clients/site_a.psk)
-
-SITE_B_PUB=$(sudo cat /etc/wireguard/clients/site_b.pub)
-SITE_B_PSK=$(sudo cat /etc/wireguard/clients/site_b.psk)
-
-HOME_PUB=$(sudo cat /etc/wireguard/clients/pixel_10_pro_home.pub)
-HOME_PSK=$(sudo cat /etc/wireguard/clients/pixel_10_pro_home.psk)
-
-CLOUD_PUB=$(sudo cat /etc/wireguard/clients/pixel_10_pro_cloud.pub)
-CLOUD_PSK=$(sudo cat /etc/wireguard/clients/pixel_10_pro_cloud.psk)
-```
-
-Записать конфиг:
-
-```bash
 sudo tee /etc/wireguard/wg0.conf << EOF
-# Table = off: маршруты управляются отдельным скриптом (wg0-routes.sh),
-# а не wg-quick, чтобы изменения пиров применялись через wg syncconf
-# без рестарта туннеля.
+# Table = off: routes are managed by wg0-routes.service, not wg-quick.
+# This allows peer changes to be applied with 'wg syncconf' without
+# restarting the interface and dropping every active session.
 [Interface]
 Address = 10.99.0.1/24
 ListenPort = 51820
-PrivateKey = ${SERVER_PRIV}
+PrivateKey = ${WG0_PRIV}
 Table = off
 
-# site: site_a - House A - primary exit
-# AllowedIPs: overlay IP + /16 supernet. 0.0.0.0/0 выбранного exit-сайта —
-# это runtime-состояние: его добавляет демон wg-exit-sync по данным BGP
-# (см. 2.8a), в конфиге его намеренно НЕТ.
+# site_a
 [Peer]
 PublicKey = ${SITE_A_PUB}
 PresharedKey = ${SITE_A_PSK}
 AllowedIPs = 10.99.0.11/32, 10.1.0.0/16
 
-# site: site_b - House B - remote (backup exit)
-# AllowedIPs: overlay IP + /16 supernet (WireGuard peer selection only;
-# actual LAN routes are installed by bgpd via eBGP, not wg-quick)
+# site_b
 [Peer]
 PublicKey = ${SITE_B_PUB}
 PresharedKey = ${SITE_B_PSK}
 AllowedIPs = 10.99.0.12/32, 10.2.0.0/16
-
-# client: pixel_10_pro_home
-[Peer]
-PublicKey = ${HOME_PUB}
-PresharedKey = ${HOME_PSK}
-AllowedIPs = 10.99.0.20/32
-
-# client: pixel_10_pro_cloud
-[Peer]
-PublicKey = ${CLOUD_PUB}
-PresharedKey = ${CLOUD_PSK}
-AllowedIPs = 10.99.0.21/32
 EOF
 
 sudo chmod 600 /etc/wireguard/wg0.conf
+sudo wg-quick strip /etc/wireguard/wg0.conf > /dev/null && echo "syntax ok"
 ```
 
-Проверить синтаксис:
-```bash
-sudo wg-quick strip /etc/wireguard/wg0.conf
-```
+Хаб не задаёт `Endpoint` ни для одного пира — он узнаёт адреса динамически
+из handshake. На стороне MikroTik нужен `persistent-keepalive = 25s`, чтобы
+сессия жила через NAT/CGNAT.
 
-### 2.7 Скрипт маршрутов и PBR (`/usr/local/sbin/wg0-routes.sh`)
+### Маршруты
 
-Маршруты вынесены из PostUp, чтобы изменения пиров можно было применять через
-`wg syncconf` без перезапуска интерфейса.
-
-PBR (policy-based routing, таблица 123): трафик от `pixel_10_pro_home`
-(profile: home) уходит в интернет через site_a (домашний роутер), а не через VPS.
+`Table = off` означает, что wg-quick не создаёт маршруты сам. Отдельный
+oneshot-юнит, привязанный к интерфейсу через `BindsTo=` — если WireGuard
+упадёт, маршруты снимутся автоматически.
 
 ```bash
 sudo tee /usr/local/sbin/wg0-routes.sh << 'EOF'
@@ -276,45 +218,24 @@ route() {
   local op="$1"; shift
   if [ "$op" = add ]; then ip route replace "$@"; else ip route del "$@" 2>/dev/null || true; fi
 }
-rule() {
-  local op="$1"; shift
-  ip rule del "$@" 2>/dev/null || true
-  if [ "$op" = add ]; then ip rule add "$@"; fi
-}
 
 if [ "$ACTION" = up ]; then OP=add; else OP=del; fi
 
-# Overlay-подсеть
+# Overlay subnet
 route "$OP" 10.99.0.0/24 dev "$IFACE"
 
-# LAN-маршруты сайтов управляются bgpd (frr.service) через eBGP, не здесь.
-# При падении WireGuard-сессии сайта BGP автоматически отзывает его маршруты.
-# Просмотр: ip route show proto bgp
-
-# Таблица 123: fail-closed пол. FRR устанавливает сюда BGP-выбранный
-# exit-дефолт с metric 20 (затеняет пол); если ни один exit-сайт не
-# анонсирует 0.0.0.0/0 — побеждает пол, home-клиенты без интернета
-# (fail closed), утечки через аплинк хаба нет.
-route "$OP" unreachable default table 123 metric 4294967294
-
-# pixel_10_pro_home (profile: home) -> интернет через выбранный exit-сайт
-rule "$OP" from 10.99.0.20/32 table 123
+# Site LAN supernets (static; no dynamic routing protocol in use)
+route "$OP" 10.1.0.0/16 via 10.99.0.11 dev "$IFACE"
+route "$OP" 10.2.0.0/16 via 10.99.0.12 dev "$IFACE"
 
 exit 0
 EOF
 
 sudo chmod 755 /usr/local/sbin/wg0-routes.sh
-```
 
-### 2.8 Systemd-юнит для маршрутов (`wg0-routes.service`)
-
-Юнит привязан к `wg-quick@wg0` (`BindsTo`) — маршруты автоматически
-поднимаются и убираются вместе с туннелем.
-
-```bash
 sudo tee /etc/systemd/system/wg0-routes.service << 'EOF'
 [Unit]
-Description=Routing rules for wg0 (generated by Ansible)
+Description=Routing entries for wg0
 After=network-online.target
 After=wg-quick@wg0.service
 BindsTo=wg-quick@wg0.service
@@ -334,127 +255,37 @@ EOF
 sudo systemctl daemon-reload
 ```
 
-### 2.8a Демон exit-failover (`wg-exit-sync`)
+**О статических маршрутах.** У каждой LAN ровно один путь — через свой
+сайт, альтернативного маршрута не существует в принципе, поэтому
+переключать нечего и динамический протокол ничего бы не добавил. При
+падении сайта его сеть просто недоступна, а пакеты к ней уходят в таймаут
+вместо быстрого ICMP unreachable — единственная разница по сравнению с
+прежней схемой на BGP. При возвращении сайта всё заработает само, ручного
+вмешательства не требуется. Падение сайта видно по возрасту handshake
+(`wg show wg0 latest-handshakes`) — в админке или вручную.
 
-Exit data path — runtime-состояние. Exit-способные сайты анонсируют дефолт по
-BGP; FRR (2.15) выбирает лучший, но zebra его в ядро не ставит. Демон
-опрашивает результат election у bgpd (каждые 5 с) и программирует обе
-половины: дефолт в таблице 123 (`proto static`, metric 20) и `0.0.0.0/0` в
-AllowedIPs выбранного пира — при падении текущего exit-сайта хаб
-автоматически переключается на следующий, при восстановлении возвращается
-(preempt). Если дефолт не анонсирует никто — демон убирает и маршрут, и 0/0,
-а unreachable-пол в таблице 123 даёт fail-closed.
+**Выхода в интернет через хаб или через сайты в этой схеме нет намеренно.**
+Задача «выйти в сеть с IP своей страны в поездках» решена отдельно — на
+выделенном VPS с VLESS/XRAY, вне этого хаба.
 
-Карта соответствия nexthop → пир (по одной строке на exit-сайт, в порядке
-приоритета):
+---
 
-```bash
-sudo tee /etc/wireguard/exit-peers.map << EOF
-# <bgp-nexthop> <wg-pubkey> <base-allowed-ips>
-10.99.0.11 ${SITE_A_PUB} 10.99.0.11/32,10.1.0.0/16
-10.99.0.12 ${SITE_B_PUB} 10.99.0.12/32,10.2.0.0/16
-EOF
-sudo chmod 600 /etc/wireguard/exit-peers.map
-```
+## 7. nftables
 
-Скрипт демона — см. `roles/wg_hub/templates/wg-exit-sync.sh.j2` (логика:
-`vtysh -c 'show bgp ipv4 unicast 0.0.0.0/0 json'` → nexthop лучшего пути →
-`ip route replace default via <gw> dev wg0 table 123 metric 20 proto static`
-+ `wg set <peer> allowed-ips <base>,0.0.0.0/0`; ядро атомарно забирает
-префикс у прежнего владельца). Установить в `/usr/local/sbin/wg-exit-sync.sh`
-(chmod 755) и создать юнит:
+Найти публичный интерфейс:
 
-```bash
-sudo tee /etc/systemd/system/wg-exit-sync.service << 'EOF'
-[Unit]
-Description=WireGuard exit-node failover sync (generated by Ansible)
-After=wg-quick@wg0.service frr.service
-BindsTo=wg-quick@wg0.service
-
-[Service]
-ExecStart=/usr/local/sbin/wg-exit-sync.sh
-Restart=always
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-```
-
-Важно: после каждого `wg syncconf` (который сбрасывает runtime 0/0) демон
-надо перезапустить — Ansible-хендлер делает это автоматически.
-
-### 2.9 Файрвол (`/etc/nftables.conf`)
-
-Найти публичный интерфейс сервера:
 ```bash
 ip route get 1.1.1.1 | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}'
-# Обычно eth0 или ens3. Подставить ниже вместо <PUB_IFACE>.
 ```
 
-**Логика зонирования:**
-- `admin` (pixel_10_pro_home): полный доступ ко всему
-- `user` (pixel_10_pro_cloud): только интернет через VPS
-- `site_a_nets`, `site_b_nets`: site-to-site между собой
-- NAT: только облачный профиль (pixel_10_pro_cloud) маскируется под IP VPS
-
-Для **bootstrap** (пока нет overlay): временно разрешить SSH на публичном интерфейсе
-добавив строку `tcp dport 5860 accept comment "bootstrap"` в цепочку `input`
-(удалить после успешного подключения через оверлей).
-
 ```bash
-# Подставить реальный публичный интерфейс:
-PUB_IFACE=eth0   # заменить по результату команды выше
-
-sudo tee /etc/nftables.conf << EOF
+sudo tee /etc/nftables.conf << 'EOF'
 #!/usr/sbin/nft -f
-# Зонирование overlay-сети хаба.
-# admin - всё; user - интернет + объявленные сервисы; sites - site-to-site.
+# Overlay-only hub: no transit internet traffic, no NAT.
 
 flush ruleset
 
 table inet filter {
-    set admin_ips {
-        type ipv4_addr
-        elements = { 10.99.0.20 }
-    }
-    set user_ips {
-        type ipv4_addr
-        elements = { 10.99.0.21 }
-    }
-    set site_nets {
-        type ipv4_addr
-        flags interval
-        elements = {
-            10.99.0.11/32,
-            10.1.10.0/24, 10.1.20.0/24, 10.1.30.0/24, 10.1.40.0/24,
-            10.99.0.12/32,
-            10.2.10.0/24, 10.2.20.0/24, 10.2.30.0/24, 10.2.40.0/24, 10.2.100.0/24
-        }
-    }
-    set site_a_nets {
-        type ipv4_addr
-        flags interval
-        elements = { 10.99.0.11/32, 10.1.10.0/24, 10.1.20.0/24, 10.1.30.0/24, 10.1.40.0/24 }
-    }
-    set site_b_nets {
-        type ipv4_addr
-        flags interval
-        elements = { 10.99.0.12/32, 10.2.10.0/24, 10.2.20.0/24, 10.2.30.0/24, 10.2.40.0/24, 10.2.100.0/24 }
-    }
-    set iot_nets {
-        type ipv4_addr
-        flags interval
-        elements = { 10.1.30.0/24, 10.2.30.0/24 }
-    }
-    set rfc1918 {
-        type ipv4_addr
-        flags interval
-        elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
-    }
-
     chain input {
         type filter hook input priority 0; policy drop;
 
@@ -464,19 +295,18 @@ table inet filter {
 
         ip protocol icmp limit rate 20/second accept
 
-        # WireGuard handshakes
+        # WireGuard handshakes from anywhere
         udp dport 51820 accept
 
-        # SSH — только через overlay (после bootstrap удалить строку ниже)
-        tcp dport 5860 accept comment "bootstrap: удалить после первого подключения через wg0"
-        iifname "wg0" tcp dport 5860 accept
+        # SSH - closed from the internet by the DO Cloud Firewall
+        tcp dport 22 accept
 
-        # Внутренний DNS — только через overlay
+        # Internal DNS - overlay only
         iifname "wg0" udp dport 53 accept
         iifname "wg0" tcp dport 53 accept
 
-        # BGP — только через overlay (для eBGP-сессий с роутерами сайтов)
-        iifname "wg0" tcp dport 179 accept
+        # node_exporter - overlay only
+        iifname "wg0" tcp dport 9100 accept
 
         log prefix "nft_input_drop: " counter drop
     }
@@ -487,92 +317,104 @@ table inet filter {
         ct state established,related accept
         ct state invalid drop
 
-        # MSS clamping — предотвращает зависание сессий через PPPoE/VPN
+        # MSS clamping - prevents stalled sessions over PPPoE/VPN paths
         tcp flags syn tcp option maxseg size set rt mtu
 
-        # admin: полный доступ
-        iifname "wg0" ip saddr @admin_ips accept
-
-        # site-to-site
-        iifname "wg0" oifname "wg0" ip saddr @site_a_nets ip daddr @site_b_nets accept
-        iifname "wg0" oifname "wg0" ip saddr @site_b_nets ip daddr @site_a_nets accept
-
-        # user: только интернет (не RFC-1918)
-        iifname "wg0" ip saddr @user_ips ip daddr != @rfc1918 accept
+        # Site-to-site and peer-to-peer traffic within the overlay.
+        # Nothing else forwards: no internet egress through this hub.
+        iifname "wg0" oifname "wg0" accept
 
         log prefix "nft_forward_drop: " counter drop
     }
 }
-
-table inet nat {
-    chain postrouting {
-        type nat hook postrouting priority srcnat; policy accept;
-        # pixel_10_pro_cloud (profile: cloud) выходит с IP VPS
-        oifname "${PUB_IFACE}" ip saddr 10.99.0.0/24 masquerade
-    }
-}
 EOF
-```
 
-Проверить синтаксис и применить:
-```bash
-sudo nft -c -f /etc/nftables.conf   # сухая проверка
+sudo nft -c -f /etc/nftables.conf && echo "ruleset ok"
 sudo systemctl reload nftables
 ```
 
-### 2.10 Resolver хаба (`/etc/resolv.conf`)
+Проверка `nft -c` перед применением обязательна: битый ruleset при прямом
+применении может отрезать доступ к хабу.
 
-Хаб должен всегда резолвить публичные адреса (Let's Encrypt, apt) независимо от
-dnsmasq и overlay. Поэтому `/etc/resolv.conf` пинируется к публичным серверам
-и делается иммутабельным.
+Таблицы `nat` нет вообще — маскировать нечего, весь форвардинг замкнут
+внутри `wg0`.
 
-Отключить systemd-resolved, если он присутствует (занимает порт 53 и
-перезаписывает resolv.conf):
+---
+
+## 8. DNS
+
+### Резолвер самого хаба
+
+Хаб должен резолвить публичные имена (apt, исходящие запросы) независимо
+от dnsmasq. Иначе получается циклическая зависимость: dnsmasq не
+поднялся — сломался apt.
+
 ```bash
 sudo systemctl disable --now systemd-resolved 2>/dev/null || true
-```
 
-Заменить resolv.conf (убрать атрибут иммутабельности, если он был):
-```bash
 sudo chattr -i /etc/resolv.conf 2>/dev/null || true
 sudo rm -f /etc/resolv.conf
 
 sudo tee /etc/resolv.conf << 'EOF'
-# Хаб резолвит через публичные серверы независимо от dnsmasq.
+# Hub resolves independently of dnsmasq and the overlay.
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 EOF
 
 sudo chattr +i /etc/resolv.conf
+lsattr /etc/resolv.conf   # ----i---------
 ```
 
-Проверить:
-```bash
-lsattr /etc/resolv.conf   # должно показать ----i---------
-curl -s https://example.com | head -5   # хаб должен резолвить и ходить в интернет
-```
+Иммутабельный флаг не даёт dhclient или пакетам переписать файл.
 
-### 2.11 dnsmasq — внутренняя зона
+### dnsmasq — внутренняя зона + апстрим
 
-**Drop-in**: запускать dnsmasq только после поднятия wg0.
+Слушает только на overlay-IP. Внешние запросы уходят на NextDNS (с
+Cloudflare как fallback) прямо с хаба — падение site_a не влияет на резолв
+у клиентов оверлея.
+
+Запуск после появления `wg0`:
 
 ```bash
 sudo mkdir -p /etc/systemd/system/dnsmasq.service.d
 
 sudo tee /etc/systemd/system/dnsmasq.service.d/wg-ordering.conf << 'EOF'
 [Unit]
+# Clear the packaged Before=nss-lookup.target, then order after wg0.
 Before=
 After=wg-quick@wg0.service
+# Restart dnsmasq whenever wg0 restarts, so it re-binds the overlay address.
+# PartOf propagates stop/restart only - it adds no start-ordering dependency
+# and therefore no cycle.
+PartOf=wg-quick@wg0.service
+
+[Service]
+# After= guarantees unit ordering, not kernel state: wg-quick can report
+# success a moment before the address is visible, and dnsmasq with
+# bind-dynamic then finds nothing to bind and silently listens nowhere.
+# Wait for the address itself, with a bounded timeout so a broken wg0
+# cannot hang boot.
+ExecStartPre=/bin/sh -c 'for i in $(seq 30); do ip -4 addr show dev wg0 2>/dev/null | grep -q "10\.99\.0\.1/" && exit 0; sleep 1; done; echo "wg0 address not ready" >&2; exit 1'
+Restart=on-failure
+RestartSec=5
 EOF
-# Примечание: Wants= намеренно не указывается — это создаёт цикл stop-зависимостей
-# (nss-lookup.target → dnsmasq → wg-quick@wg0 → network → nss-lookup.target)
-# и мешает корректной остановке wg0 при перезагрузке.
+
+sudo systemctl daemon-reload
 ```
 
-**Конфиг внутренней зоны:**
+`Wants=` намеренно не указывается: он создаёт цикл stop-зависимостей
+(`nss-lookup.target` → dnsmasq → `wg-quick@wg0` → network → `nss-lookup.target`)
+и мешает корректно останавливать wg0 при перезагрузке.
 
-dnsmasq слушает только на overlay-IP `10.99.0.1`. Запросы к `in.threadnull.dev`
-обрабатывает локально, всё остальное форвардит на роутер A (NextDNS), запасной — `1.1.1.1`.
+Проверить, что drop-in подхватился:
+
+```bash
+systemctl show dnsmasq -p After | tr ' ' '\n' | grep wg-quick
+```
+
+Профиль NextDNS идентифицируется через `add-cpe-id` — идентификатор
+передаётся в EDNS0-опции самого запроса, поэтому привязка публичного IP
+(Linked IP) не нужна и работает независимо от смены IP droplet'а.
 
 ```bash
 sudo tee /etc/dnsmasq.d/wg-internal.conf << 'EOF'
@@ -580,518 +422,298 @@ listen-address=10.99.0.1
 bind-dynamic
 no-resolv
 strict-order
-server=10.99.0.11
-server=1.1.1.1
 domain-needed
 bogus-priv
 cache-size=2000
 
-# Зона in.threadnull.dev не форвардится наружу
+# NextDNS profile ID - sent as an EDNS0 option, no Linked IP needed.
+# Applies to every upstream query, including the Cloudflare fallback below.
+add-cpe-id=5a7224
+
+# IPv4 first: with strict-order dnsmasq queries upstreams in this exact
+# order, and unreachable IPv6 servers would stall every lookup on a
+# droplet without IPv6. Add the v6 entries only if IPv6 is enabled.
+server=45.90.28.0
+server=45.90.30.0
+# server=2a07:a8c0::
+# server=2a07:a8c1::
+
+# Last-resort fallback if NextDNS anycast is unreachable
+server=1.1.1.1
+
+# Authoritative zone - never forwarded upstream
 local=/in.threadnull.dev/
 
-# A-записи overlay
 host-record=hub.in.threadnull.dev,10.99.0.1
 host-record=router-a.in.threadnull.dev,10.99.0.11
 host-record=router-b.in.threadnull.dev,10.99.0.12
-host-record=pixel-10-pro-home.in.threadnull.dev,10.99.0.20
-host-record=pixel-10-pro-cloud.in.threadnull.dev,10.99.0.21
 EOF
+
+sudo systemctl restart dnsmasq
 ```
 
-### 2.12 Клиентские конфиги
+Проверить, что запросы реально доходят до вашего профиля: изнутри оверлея
+открыть `test.nextdns.io` — ответ должен содержать ваш ID профиля. Если
+показывает `unconfigured` — `add-cpe-id` не применился, проверьте, что
+файл не перекрыт другим конфигом в `/etc/dnsmasq.d/`.
 
-Читаем публичный ключ сервера и ключи клиентов:
+---
+
+## 9. Мониторинг
+
+Только системные метрики: CPU, память, диск, сетевые интерфейсы, состояние
+systemd-юнитов.
 
 ```bash
-SERVER_PUB=$(sudo cat /etc/wireguard/server.pub)
+sudo tee /etc/default/prometheus-node-exporter << 'EOF'
+ARGS="--web.listen-address=10.99.0.1:9100"
+EOF
 
-# pixel_10_pro_home (group: admin, profile: home -> трафик через роутер A)
-sudo tee /etc/wireguard/clients/pixel_10_pro_home.conf << EOF
-# group: admin, profile: home
+sudo systemctl restart prometheus-node-exporter
+```
+
+Слушает только на overlay-адресе. Добавить `10.99.0.1:9100` как таргет в
+существующий Prometheus.
+
+WireGuard-метрики (возраст handshake, трафик по пирам) через Prometheus не
+собираются — их читает PHP-админка напрямую из `wg show`.
+
+---
+
+## 10. Запуск и DO Cloud Firewall
+
+```bash
+sudo systemctl enable --now wg-quick@wg0 wg0-routes
+sudo systemctl enable --now dnsmasq nftables prometheus-node-exporter
+
+sudo wg show
+```
+
+Когда оверлей поднят и `ssh ops@10.99.0.1` работает через туннель —
+закрыть публичный SSH.
+
+Панель DO: **Networking → Firewalls → Create Firewall**, привязать к
+droplet'у.
+
+Inbound rules:
+- `UDP 51820` — Sources: `All IPv4, All IPv6`
+- `TCP 22` — **не добавлять**
+
+После этого SSH снаружи недоступен; управление — только через туннель.
+Аварийный доступ — веб-консоль DO (Access → Console), она не зависит от
+сетевых правил.
+
+---
+
+## 11. Сертификаты
+
+`lego` + Cloudflare DNS-01 живёт на сервисной VPS, не на хабе. Хаб в
+выпуске и раздаче сертификатов не участвует: ни портов, ни файлов с его
+стороны не требуется. Сервисные VPS забирают готовый сертификат оттуда же,
+где он выпускается.
+
+---
+
+## 12. Добавление пира
+
+```bash
+PEER=<name>
+IP=10.99.0.<N>
+
+(umask 077; wg genkey | sudo tee /etc/wireguard/peers/${PEER}.priv | \
+   wg pubkey | sudo tee /etc/wireguard/peers/${PEER}.pub) > /dev/null
+(umask 077; wg genpsk | sudo tee /etc/wireguard/peers/${PEER}.psk) > /dev/null
+sudo chmod 600 /etc/wireguard/peers/${PEER}.priv /etc/wireguard/peers/${PEER}.psk
+```
+
+Добавить блок в `/etc/wireguard/wg0.conf`:
+
+```
+[Peer]
+PublicKey = <содержимое peers/<name>.pub>
+PresharedKey = <содержимое peers/<name>.psk>
+AllowedIPs = 10.99.0.<N>/32
+```
+
+Для нового **сайта** — плюс его LAN-супернет в `AllowedIPs`, и не забыть
+добавить маршрут в `wg0-routes.sh` с последующим
+`sudo systemctl restart wg0-routes`.
+
+Применить без разрыва существующих сессий:
+
+```bash
+sudo wg syncconf wg0 <(sudo wg-quick strip /etc/wireguard/wg0.conf)
+```
+
+DNS-запись — в `/etc/dnsmasq.d/wg-internal.conf`, затем
+`sudo systemctl restart dnsmasq`.
+
+Конфиг для клиента:
+
+```bash
+cat << EOF
 [Interface]
-Address = 10.99.0.20/32
-PrivateKey = $(sudo cat /etc/wireguard/clients/pixel_10_pro_home.priv)
+PrivateKey = $(sudo cat /etc/wireguard/peers/${PEER}.priv)
+Address = ${IP}/24
 DNS = 10.99.0.1
 
 [Peer]
-PublicKey = ${SERVER_PUB}
-PresharedKey = $(sudo cat /etc/wireguard/clients/pixel_10_pro_home.psk)
-Endpoint = 65.21.177.182:51820
-AllowedIPs = 0.0.0.0/0
+PublicKey = $(sudo cat /etc/wireguard/wg0.pub)
+PresharedKey = $(sudo cat /etc/wireguard/peers/${PEER}.psk)
+Endpoint = <публичный-IP-хаба>:51820
+AllowedIPs = 10.99.0.0/24, 10.1.0.0/16, 10.2.0.0/16
 PersistentKeepalive = 25
 EOF
-sudo chmod 600 /etc/wireguard/clients/pixel_10_pro_home.conf
-
-# pixel_10_pro_cloud (group: user, profile: cloud -> трафик через IP VPS)
-sudo tee /etc/wireguard/clients/pixel_10_pro_cloud.conf << EOF
-# group: user, profile: cloud
-[Interface]
-Address = 10.99.0.21/32
-PrivateKey = $(sudo cat /etc/wireguard/clients/pixel_10_pro_cloud.priv)
-DNS = 10.99.0.1
-
-[Peer]
-PublicKey = ${SERVER_PUB}
-PresharedKey = $(sudo cat /etc/wireguard/clients/pixel_10_pro_cloud.psk)
-Endpoint = 65.21.177.182:51820
-AllowedIPs = 0.0.0.0/0
-PersistentKeepalive = 25
-EOF
-sudo chmod 600 /etc/wireguard/clients/pixel_10_pro_cloud.conf
 ```
 
-QR-код для импорта в WireGuard-приложение:
+`AllowedIPs` у клиента содержит только приватные диапазоны — split tunnel:
+через туннель идёт лишь трафик к оверлею и LAN сайтов, остальное — мимо.
+Для MikroTik вместо этого — соответствующие команды `/interface/wireguard`
+на роутере, ключи те же.
+
+QR-код для мобильного клиента:
+
 ```bash
-sudo qrencode -t ansiutf8 < /etc/wireguard/clients/pixel_10_pro_home.conf
-sudo qrencode -t ansiutf8 < /etc/wireguard/clients/pixel_10_pro_cloud.conf
+qrencode -t ansiutf8 < <клиентский-конфиг>
 ```
 
-### 2.13 MikroTik-сниппет для site_a
+### Ротация ключей пира
 
-Команды вставляются в терминал роутера (Winbox или SSH). Ключи уже содержат
-конкретные значения — никаких плейсхолдеров. Сниппет настраивает WireGuard
-**и** eBGP за один проход.
+```bash
+sudo rm /etc/wireguard/peers/<name>.{priv,pub,psk}
+# перегенерировать по инструкции выше, обновить блок в wg0.conf,
+# применить syncconf, доставить новый конфиг на устройство
+```
 
-Сниппет генерируется автоматически при `ansible-playbook playbooks/hub.yml`
-и сохраняется в `/etc/wireguard/clients/site_a.rsc` на хабе.
+---
+
+## 13. Настройка MikroTik на сайтах
+
+Конфигурация заметно короче прежней: пропадает весь блок BGP (instance,
+connection, routing id, address-list, blackhole-якорь) — вместо динамического
+анонса LAN-супернетов ставится один статический маршрут к сети соседнего
+сайта. Всё, что делал `output.default-originate=if-installed` (анонс
+дефолта, пока жив WAN), больше не нужно: выхода в интернет через сайты в
+новой схеме нет.
+
+Выполнять **в Safe Mode**, если подключены удалённо: в терминале нажать
+`Ctrl+X`, выполнить блок, при успехе снова `Ctrl+X` для фиксации. При
+разрыве связи роутер сам откатит изменения.
+
+### Конфигурация (site_a)
+
+Ключи и PSK берутся с хаба: приватный ключ роутера — из
+`/etc/wireguard/peers/site_a.priv`, публичный ключ хаба — из
+`/etc/wireguard/wg0.pub`, PSK — из `/etc/wireguard/peers/site_a.psk`.
 
 ```
-# ── WireGuard ────────────────────────────────────────────────────────────────
+# 1. This router's private key (generated on the hub)
+/interface wireguard set [find name=wg-client] private-key="<peers/site_a.priv>"
 
-# 1. Приватный ключ роутера (сгенерирован хабом)
-/interface wireguard set [find name=wg-client] private-key="<KEY>"
-
-# 2. Peer — хаб (allowed-address: оверлей + /16 суперсеть site_b)
-/interface wireguard peers remove [find interface=wg-client]
+# 2. Hub peer.
+#    allowed-address covers the overlay and the OTHER site's LAN supernet —
+#    this is the encryption/routing filter, not a routing table entry.
 /interface wireguard peers add interface=wg-client \
-    public-key="<HUB_PUB>" \
-    preshared-key="<PSK>" \
-    endpoint-address=65.21.177.182 endpoint-port=51820 \
+    public-key="<wg0.pub>" \
+    preshared-key="<peers/site_a.psk>" \
+    endpoint-address=<публичный-IP-хаба> endpoint-port=51820 \
     persistent-keepalive=25s \
     allowed-address=10.99.0.0/24,10.2.0.0/16
 
-# 3. IP на overlay-интерфейсе
+# 3. Overlay address (unchanged)
 /ip address set [find interface=wg-client] address=10.99.0.11/24 network=10.99.0.0
 
-# 4. Форвардинг *.in.threadnull.dev -> хаб
+# 4. Static route to the other site's LAN.
+#    BGP used to install this dynamically; RouterOS does NOT create routes
+#    from allowed-address, so it has to be explicit now.
+/ip route add dst-address=10.2.0.0/16 gateway=10.99.0.1 comment="site_b LAN via hub"
+
+# 5. Internal zone DNS: forward *.in.threadnull.dev to the hub
 /ip dns static remove [find type=FWD name="in.threadnull.dev"]
-/ip dns static add type=FWD name="in.threadnull.dev" forward-to=10.99.0.1
-
-# ── BGP (eBGP к хабу, анонсирует суперсеть LAN этого сайта) ─────────────────
-
-# 5. Router ID привязан к overlay IP
-/routing id add name=wg-bgp-id id=10.99.0.11
-
-# 6. BGP инстанс (ASN 65011 = 65010 + номер сайта 1)
-/routing bgp instance add name=wg-bgp-inst as=65011 router-id=wg-bgp-id
-
-# 7. Список подсетей для анонса хабу
-/ip firewall address-list add list=BGP_Export address=10.1.0.0/16
-
-# 8. BGP соединение с хабом. output.default-originate=if-installed (только
-#    на exit-способных сайтах): анонсирует 0.0.0.0/0 пока в таблице есть
-#    установленный дефолт (динамический от ISP) — умер WAN → дефолт отозван,
-#    хаб переключается на следующий exit-сайт. output.network для дефолта
-#    не годится: он подхватывает только статические маршруты.
-/routing bgp connection add name=wg-hub \
-    instance=wg-bgp-inst \
-    local.address=10.99.0.11 \
-    local.role=ebgp \
-    remote.address=10.99.0.1 \
-    remote.as=65001 \
-    output.network=BGP_Export \
-    output.default-originate=if-installed \
-    connect=yes \
-    listen=yes
-
-# 9. Blackhole-анкор — BGP анонсирует только те префиксы, что есть в таблице.
-#    Реальный трафик никогда не дропается: /24 VLAN-маршруты более специфичны.
-/ip route add dst-address=10.1.0.0/16 blackhole comment="BGP advertisement anchor"
+/ip dns static add type=FWD name="in.threadnull.dev" match-subdomain=yes forward-to=10.99.0.1
 ```
 
-Для `site_b` структура идентична: ASN=65012, IP=10.99.0.12, address=10.2.0.0/16,
-allowed-address в WireGuard-пире = `10.99.0.0/24,10.1.0.0/16`.
-`output.default-originate=if-installed` ставится на каждом exit-способном сайте
-(какие сайты принимает хаб и с каким приоритетом — решает route-map `OVERLAY-IN`
-на хабе, см. 2.15).
+### site_b
 
-### 2.14 Запуск всех сервисов
+То же самое с зеркальными значениями: `peers/site_b.*` вместо
+`peers/site_a.*`, адрес `10.99.0.12/24`, в `allowed-address` —
+`10.99.0.0/24,10.1.0.0/16`, статический маршрут на `10.1.0.0/16`.
 
-```bash
-sudo systemctl daemon-reload
+### Проверка на роутере
 
-# Поднять туннель (wg0-routes запустится автоматически через BindsTo)
-sudo systemctl enable --now wg-quick@wg0
-
-# Убедиться, что маршруты применились
-sudo systemctl enable --now wg0-routes
-
-# nftables
-sudo systemctl enable nftables
-sudo systemctl restart nftables
-
-# dnsmasq (стартует после wg0 согласно drop-in)
-sudo systemctl enable --now dnsmasq
-
-# frr (BGP — динамические LAN-маршруты сайтов, стартует после wg0)
-sudo systemctl enable --now frr
-
-# демон exit-failover (после frr — ему нужен BGP-дефолт в таблице 123)
-sudo systemctl enable --now wg-exit-sync
+```
+/interface wireguard peers print detail    # last-handshake должен обновляться
+/ping 10.99.0.1 count=4                    # хаб доступен
+/ping 10.99.0.12 count=4                   # соседний сайт (с site_a)
+/ip route print where dst-address=10.2.0.0/16
+:put [:resolve hub.in.threadnull.dev]      # должно вернуть 10.99.0.1
 ```
 
-### 2.15 FRRouting / BGP (роль `frr_hub`)
-
-Хаб устанавливает eBGP-сессии с роутерами сайтов через WireGuard-оверлей. LAN-маршруты
-сайтов (`10.N.0.0/16`) устанавливаются динамически — при падении туннеля маршруты
-отзываются автоматически. Кроме того, здесь живёт **выбор exit-дефолта**: сайты с
-`exit_priority` анонсируют `0.0.0.0/0`, route-map `OVERLAY-IN` принимает дефолт только
-от них и назначает local-pref (= 1000 − priority). Route-map `BGP-TO-KERNEL` не пускает
-выбранный дефолт в ядро (иначе при флапе аплинка он мог бы захватить egress самого
-хаба; zebra `set table` в FRR 10 молча не загружается) — в таблицу 123 его ставит
-демон wg-exit-sync (2.8a).
-
-```bash
-sudo apt install -y frr
-```
-
-Включить bgpd (все остальные демоны оставить выключенными):
-
-```bash
-sudo tee /etc/frr/daemons << 'EOF'
-bgpd=yes
-ospfd=no
-ospf6d=no
-ripd=no
-ripngd=no
-isisd=no
-pimd=no
-ldpd=no
-nhrpd=no
-eigrpd=no
-babeld=no
-sharpd=no
-pbrd=no
-bfdd=no
-fabricd=no
-vrrpd=no
-EOF
-```
-
-Конфигурация BGP (hub ASN 65001, слушать весь оверлей):
-
-```bash
-sudo tee /etc/frr/frr.conf << 'EOF'
-! Managed by Ansible (roles/frr_hub). Do not edit by hand.
-frr defaults traditional
-hostname hub
-log syslog informational
-service integrated-vtysh-config
-!
-router bgp 65001
- bgp router-id 10.99.0.1
- bgp log-neighbor-changes
- no bgp ebgp-requires-policy
- !
- neighbor OVERLAY peer-group
- neighbor OVERLAY remote-as external
- neighbor OVERLAY description "WireGuard overlay peers (sites)"
- neighbor OVERLAY timers 5 15
- !
- bgp listen range 10.99.0.0/24 peer-group OVERLAY
- !
- address-family ipv4 unicast
-  redistribute connected route-map ONLY-OVERLAY
-  neighbor OVERLAY activate
-  neighbor OVERLAY soft-reconfiguration inbound
-  ! ВСЯ входная политика — в route-map OVERLAY-IN. Не добавлять сюда
-  ! prefix-list ... in: FRR применяет ОБА фильтра, и prefix-list срежет
-  ! 0.0.0.0/0 раньше route-map.
-  neighbor OVERLAY route-map OVERLAY-IN in
-  ! ИНВАРИАНТ: SAFE-OUT обязан резать 0.0.0.0/0 наружу, иначе сайты
-  ! получат дефолт через хаб (петля / неверный egress).
-  neighbor OVERLAY prefix-list SAFE-OUT out
- exit-address-family
-!
-ip prefix-list DEFAULT-ROUTE seq 5 permit 0.0.0.0/0
-!
-ip prefix-list SITE-LANS seq 5 permit 10.0.0.0/8 le 24
-!
-ip prefix-list NEXTHOP-SITE-A seq 5 permit 10.99.0.11/32
-ip prefix-list NEXTHOP-SITE-B seq 5 permit 10.99.0.12/32
-!
-ip prefix-list SAFE-OUT seq 5 permit 10.99.0.0/24
-ip prefix-list SAFE-OUT seq 10 permit 10.0.0.0/8 le 24
-ip prefix-list SAFE-OUT seq 15 deny any
-!
-ip prefix-list OVERLAY-ONLY seq 5 permit 10.99.0.0/24
-ip prefix-list OVERLAY-ONLY seq 10 deny any
-!
-route-map ONLY-OVERLAY permit 10
- match ip address prefix-list OVERLAY-ONLY
-!
-! Выбор exit-дефолта: 0.0.0.0/0 принимается только от exit-способных сайтов,
-! local-pref = 1000 - exit_priority (site_a: 100 -> 900, site_b: 200 -> 800).
-route-map OVERLAY-IN permit 10
- match ip address prefix-list DEFAULT-ROUTE
- match ip next-hop prefix-list NEXTHOP-SITE-A
- set local-preference 900
-route-map OVERLAY-IN permit 20
- match ip address prefix-list DEFAULT-ROUTE
- match ip next-hop prefix-list NEXTHOP-SITE-B
- set local-preference 800
-route-map OVERLAY-IN deny 500
- match ip address prefix-list DEFAULT-ROUTE
-route-map OVERLAY-IN permit 600
- match ip address prefix-list SITE-LANS
-!
-! BGP-дефолт НЕ устанавливается zebra в ядро — таблицу 123 программирует
-! демон wg-exit-sync по данным bgpd. Терминальный permit ОБЯЗАТЕЛЕН — без
-! него zebra перестанет ставить в ядро остальные BGP-маршруты.
-route-map BGP-TO-KERNEL deny 10
- match ip address prefix-list DEFAULT-ROUTE
-route-map BGP-TO-KERNEL permit 20
-!
-ip protocol bgp route-map BGP-TO-KERNEL
-!
-EOF
-sudo systemctl enable --now frr
-```
+Если handshake не появляется — проверьте, что на хабе публичный ключ
+именно этого роутера прописан в блоке `[Peer]`, и что UDP 51820 открыт
+в DO Cloud Firewall.
 
 ---
 
-## Шаг 3 — Сертификаты (роль `certs_hub`)
-
-Хаб получает wildcard-сертификат `*.in.threadnull.dev` через DNS-01 challenge
-в Cloudflare с помощью утилиты lego. Приватный ключ CF-токена хранится только
-на хабе; сервисные VPS забирают готовый сертификат через `rrsync`.
-
-### 3.1 Установка lego
+## 14. Проверка
 
 ```bash
-LEGO_VERSION="5.2.2"
-curl -fsSL "https://github.com/go-acme/lego/releases/download/v${LEGO_VERSION}/lego_v${LEGO_VERSION}_linux_amd64.tar.gz" \
-  | sudo tar -xz -C /usr/local/bin lego
-sudo chmod 755 /usr/local/bin/lego
-lego --version
+echo "=== ip_forward ===" && sysctl net.ipv4.ip_forward && \
+echo "=== services ===" && systemctl is-active wg-quick@wg0 wg0-routes \
+    nftables dnsmasq prometheus-node-exporter && \
+echo "=== peers ===" && sudo wg show && \
+echo "=== routes ===" && ip route show | grep wg0 && \
+echo "=== dns ===" && dig +short @10.99.0.1 hub.in.threadnull.dev && \
+dig +short @10.99.0.1 example.com && \
+echo "=== metrics ===" && curl -s 10.99.0.1:9100/metrics | head -3
 ```
 
-### 3.2 Директории и credentials
+Ожидаем: `ip_forward = 1`, все юниты `active`, у каждого пира handshake
+свежее 120 секунд, маршруты на месте, DNS отвечает и на внутреннюю зону,
+и на внешнюю.
 
-```bash
-sudo mkdir -p /etc/lego /var/lib/lego
-sudo chmod 700 /etc/lego /var/lib/lego
-```
-
-Создать Cloudflare API-токен:
-- Cloudflare Dashboard → My Profile → API Tokens → Create Token
-- Шаблон "Edit zone DNS", ограничить зоной `threadnull.dev`
-
-```bash
-# Вставить реальный токен:
-sudo tee /etc/lego/cloudflare.env << 'EOF'
-CLOUDFLARE_DNS_API_TOKEN=<ВАШ_ТОКЕН>
-EOF
-sudo chmod 600 /etc/lego/cloudflare.env
-```
-
-### 3.3 Скрипт обновления сертификата
-
-```bash
-sudo tee /usr/local/sbin/lego-renew.sh << 'EOF'
-#!/usr/bin/env bash
-# lego run: получает сертификат если его нет, обновляет когда подходит срок.
-set -euo pipefail
-
-LEGO=/usr/local/bin/lego
-DATA=/var/lib/lego
-PUB=/var/lib/wg-certs
-
-if [ -z "${CLOUDFLARE_DNS_API_TOKEN:-}" ] && [ -f /etc/lego/cloudflare.env ]; then
-  set -a; . /etc/lego/cloudflare.env; set +a
-fi
-
-ARGS=(run --accept-tos --path "$DATA" --email "me@threadnull.dev" --dns cloudflare)
-ARGS+=(--domains "*.in.threadnull.dev")
-
-"$LEGO" "${ARGS[@]}"
-
-CRT="$(find "$DATA" -type f -name '*.crt' ! -name '*.issuer.crt' 2>/dev/null | head -1)"
-KEY="${CRT%.crt}.key"
-
-if [ -z "$CRT" ] || [ ! -f "$CRT" ] || [ ! -f "$KEY" ]; then
-  echo "ERROR: сертификат или ключ не найдены в $DATA" >&2
-  exit 1
-fi
-
-install -m 0640 -g certsync "$CRT" "$PUB/fullchain.pem"
-install -m 0640 -g certsync "$KEY" "$PUB/privkey.pem"
-EOF
-
-sudo chmod 755 /usr/local/sbin/lego-renew.sh
-```
-
-### 3.4 Пользователь certsync и директория публикации
-
-Сервисные VPS забирают готовый сертификат через ограниченный rsync-аккаунт.
-
-```bash
-sudo useradd --system --shell /bin/bash --create-home certsync
-sudo mkdir -p /var/lib/wg-certs
-sudo chown root:certsync /var/lib/wg-certs
-sudo chmod 750 /var/lib/wg-certs
-
-sudo mkdir -p /home/certsync/.ssh
-sudo chown certsync:certsync /home/certsync/.ssh
-sudo chmod 700 /home/certsync/.ssh
-sudo touch /home/certsync/.ssh/authorized_keys
-sudo chown certsync:certsync /home/certsync/.ssh/authorized_keys
-sudo chmod 600 /home/certsync/.ssh/authorized_keys
-```
-
-### 3.5 Первичное получение сертификата
-
-```bash
-sudo CLOUDFLARE_DNS_API_TOKEN=$(sudo cat /etc/lego/cloudflare.env | cut -d= -f2-) \
-     /usr/local/sbin/lego-renew.sh
-```
-
-Если всё прошло успешно:
-```bash
-ls -la /var/lib/wg-certs/   # fullchain.pem и privkey.pem
-```
-
-### 3.6 Systemd-таймер для автопродления
-
-```bash
-sudo tee /etc/systemd/system/lego-renew.service << 'EOF'
-[Unit]
-Description=Obtain/renew wildcard certificate via lego
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-EnvironmentFile=/etc/lego/cloudflare.env
-ExecStart=/usr/local/sbin/lego-renew.sh
-EOF
-
-sudo tee /etc/systemd/system/lego-renew.timer << 'EOF'
-[Unit]
-Description=Daily certificate renewal check
-
-[Timer]
-OnCalendar=*-*-* 04:17:00
-RandomizedDelaySec=30m
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now lego-renew.timer
-```
+Site-to-site отдельно: с устройства в LAN site_a пингануть адрес в LAN
+site_b — трафик должен пройти через хаб.
 
 ---
 
-## Шаг 4 — Проверка
+## 15. Диагностика
 
-### Состояние сервисов
+**Пир не доступен**
+
+```
+1. sysctl net.ipv4.ip_forward        -> 0: sudo sysctl -w net.ipv4.ip_forward=1
+2. sudo wg show wg0 latest-handshakes -> нет handshake: битый конфиг/ключи
+                                          на стороне пира, или нет keepalive
+3. sudo nft list chain inet filter forward -> нет подходящего правила
+4. ip route show | grep wg0          -> нет маршрута: systemctl restart wg0-routes
+```
+
+**DNS не резолвит `*.in.threadnull.dev`**
+
+```
+1. dig @10.99.0.1 <имя>.in.threadnull.dev
+   -> NXDOMAIN/таймаут: systemctl status dnsmasq; ss -ulnp | grep :53
+2. dig работает, а клиент нет -> клиент не спрашивает 10.99.0.1
+   MikroTik:  /ip dns static add type=FWD name="in.threadnull.dev" forward-to=10.99.0.1
+   Linux:     resolvectl status / cat /etc/resolv.conf
+```
+
+**Логи**
 
 ```bash
-sudo systemctl status wg-quick@wg0 wg0-routes nftables dnsmasq frr lego-renew.timer
+journalctl -u wg-quick@wg0 -u wg0-routes -u nftables -u dnsmasq \
+           --since "1 hour ago" --no-pager
+
+journalctl -k | grep "nft_forward_drop\|nft_input_drop"
 ```
 
-### WireGuard
+**Полезные команды**
 
 ```bash
-sudo wg show
-# Ожидаем: интерфейс wg0 поднят, видны peer-записи для всех пиров
+sudo wg show wg0 latest-handshakes   # возраст handshake по пирам
+sudo wg show wg0 transfer            # трафик; 0 у живого пира = подозрительно
+sudo nft list ruleset                # что реально в ядре, не что в файле
+sudo nft -c -f /etc/nftables.conf    # проверка без применения
+ip route show table all | grep wg
 ```
-
-### BGP
-
-```bash
-sudo vtysh -c "show bgp summary"
-# Ожидаем: State=Established для каждого подключённого сайта, PfxRcvd=1
-
-ip route show proto bgp
-# Ожидаем: 10.1.0.0/16 via 10.99.0.11 dev wg0 (и 10.2.0.0/16 при наличии site_b)
-```
-
-### Маршруты
-
-```bash
-ip route show dev wg0          # overlay + маршруты BGP-суперсетей сайтов
-ip route show table 123        # default via 10.99.0.1N proto static metric 20
-                               # + unreachable default metric 4294967294 (пол)
-ip rule show                   # правило: from 10.99.0.20/32 table 123
-sudo wg show wg0 allowed-ips | grep 0.0.0.0/0   # владелец 0/0 = BGP nexthop
-journalctl -u wg-exit-sync -n 10                # решения демона failover
-```
-
-### nftables
-
-```bash
-sudo nft list ruleset
-```
-
-### DNS
-
-```bash
-# С устройства в overlay:
-dig hub.in.threadnull.dev @10.99.0.1
-dig router-a.in.threadnull.dev @10.99.0.1
-```
-
-### Сертификат
-
-```bash
-openssl x509 -in /var/lib/wg-certs/fullchain.pem -noout -subject -dates
-# subject: CN=*.in.threadnull.dev
-```
-
-### Подключение клиента
-
-После импорта QR-кода в WireGuard-приложение:
-- `pixel_10_pro_cloud`: внешний IP должен быть `65.21.177.182` (IP VPS)
-- `pixel_10_pro_home`: внешний IP должен быть домашним IP site_a
-
----
-
-## Шаг 5 — Отключение публичного SSH (после верификации overlay)
-
-Когда `ssh -p 5860 wg@10.99.0.1` работает через overlay, убрать временную
-bootstrap-строку из nftables и оставить SSH только через wg0.
-
-В `/etc/nftables.conf` в цепочке `input` удалить строку:
-```
-tcp dport 5860 accept comment "bootstrap: удалить после первого подключения через wg0"
-```
-
-Применить:
-```bash
-sudo nft -c -f /etc/nftables.conf   # проверка
-sudo systemctl reload nftables
-```
-
-После этого SSH доступен только через WireGuard-туннель. Аварийный доступ — через
-консоль Hetzner.
-
----
-
-## Добавление нового пира (краткая схема)
-
-**Через Ansible (рекомендуется):**
-1. Добавить блок в `group_vars/all/network.yml` (site/client/service).
-2. `ansible-playbook playbooks/hub.yml --ask-vault-pass` — генерирует ключи, обновляет `wg0.conf` через `wg syncconf`, ACL, DNS.
-3. Для нового **сайта**: скопировать `/etc/wireguard/clients/<name>.rsc` с хаба, вставить в терминал MikroTik. Сниппет настроит WireGuard **и** BGP. Проверить: `vtysh -c "show bgp summary"`.
-
-**Вручную (без Ansible):**
-1. Сгенерировать ключи: `wg genkey | tee /etc/wireguard/clients/<name>.priv | wg pubkey > /etc/wireguard/clients/<name>.pub && wg genpsk > /etc/wireguard/clients/<name>.psk`
-2. Добавить `[Peer]`-блок в `/etc/wireguard/wg0.conf`
-3. Применить без рестарта туннеля: `sudo wg syncconf wg0 <(sudo wg-quick strip /etc/wireguard/wg0.conf)`
-4. Обновить nftables (если нужны новые forward-правила): `sudo systemctl reload nftables`
-5. Добавить A-запись в `/etc/dnsmasq.d/wg-internal.conf` и `sudo systemctl restart dnsmasq`
-6. Если это сайт — добавить маршруты в `wg0-routes.sh` и `sudo systemctl restart wg0-routes`

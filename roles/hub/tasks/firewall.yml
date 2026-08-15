@@ -1,0 +1,17 @@
+---
+# One inet filter table, no nat table: all forwarding is wg0 -> wg0, so
+# there is nothing to translate.
+- name: Deploy the nftables ruleset
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    mode: "0755"
+    # A malformed ruleset applied directly can lock the operator out.
+    validate: nft -c -f %s
+  notify: Reload nftables
+
+- name: Enable and start nftables
+  ansible.builtin.systemd_service:
+    name: nftables
+    enabled: true
+    state: started

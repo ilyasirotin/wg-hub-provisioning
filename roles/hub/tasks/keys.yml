@@ -1,0 +1,91 @@
+---
+# The hub is the source of truth for all WireGuard private material.
+# Generation is guarded by `creates:` - an existing key is never
+# regenerated, so re-running the playbook can not break a paired peer.
+- name: Create key directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - /etc/wireguard
+    - /etc/wireguard/peers
+
+- name: Generate the hub keypair
+  ansible.builtin.shell: |
+    set -o pipefail
+    umask 077
+    wg genkey | tee /etc/wireguard/wg0.priv | wg pubkey > /etc/wireguard/wg0.pub
+  args:
+    executable: /bin/bash
+    creates: /etc/wireguard/wg0.priv
+
+- name: Generate peer keypairs
+  ansible.builtin.shell: |
+    set -o pipefail
+    umask 077
+    wg genkey | tee /etc/wireguard/peers/{{ item.name }}.priv \
+      | wg pubkey > /etc/wireguard/peers/{{ item.name }}.pub
+  args:
+    executable: /bin/bash
+    creates: "/etc/wireguard/peers/{{ item.name }}.priv"
+  loop: "{{ peers }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Generate peer pre-shared keys
+  ansible.builtin.shell: |
+    umask 077
+    wg genpsk > /etc/wireguard/peers/{{ item.name }}.psk
+  args:
+    executable: /bin/bash
+    creates: "/etc/wireguard/peers/{{ item.name }}.psk"
+  loop: "{{ peers }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Enforce hub private key permissions
+  ansible.builtin.file:
+    path: /etc/wireguard/wg0.priv
+    mode: "0600"
+
+- name: Enforce peer private material permissions
+  ansible.builtin.file:
+    path: "/etc/wireguard/peers/{{ item.0.name }}.{{ item.1 }}"
+    mode: "0600"
+  loop: "{{ peers | product(['priv', 'psk']) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}.{{ item.1 }}"
+
+- name: Read the hub keys
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  register: hub_keys_raw
+  loop:
+    - /etc/wireguard/wg0.priv
+    - /etc/wireguard/wg0.pub
+  no_log: true
+
+- name: Read the peer keys
+  ansible.builtin.slurp:
+    src: "/etc/wireguard/peers/{{ item.0.name }}.{{ item.1 }}"
+  register: hub_peer_keys_raw
+  loop: "{{ peers | product(['priv', 'pub', 'psk']) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}.{{ item.1 }}"
+  no_log: true
+
+- name: Assemble key facts
+  ansible.builtin.set_fact:
+    hub_keys: >-
+      {{ dict(hub_keys_raw.results | map(attribute='source') | map('basename')
+         | zip(hub_keys_raw.results | map(attribute='content') | map('b64decode') | map('trim'))) }}
+    hub_peer_keys: >-
+      {%- set data = {} -%}
+      {%- for res in hub_peer_keys_raw.results -%}
+        {%- set name = res.item.0.name -%}
+        {%- if name not in data -%}{%- set _ = data.update({name: {}}) -%}{%- endif -%}
+        {%- set _ = data[name].update({res.item.1: res.content | b64decode | trim}) -%}
+      {%- endfor -%}
+      {{ data }}
+  no_log: true

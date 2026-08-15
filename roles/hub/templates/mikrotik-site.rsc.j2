@@ -1,0 +1,39 @@
+# Managed by Ansible. WireGuard config for {{ item.name }} ({{ item.address }}, LAN {{ item.lan_supernet }}).
+# Paste on THIS router (Winbox terminal / SSH). Run under Safe Mode if
+# remote: Ctrl+X, paste, Ctrl+X again to commit. On a dropped session the
+# router rolls the changes back by itself.
+# The hub generated this router's keypair - the keys below are complete.
+# Idempotent: the existing hub peer and routes are removed and re-added.
+#
+# Assumes the interface "wg-client" exists. For a brand-new router:
+#   /interface wireguard add name=wg-client listen-port={{ wg_port }} mtu=1420
+#   /interface list member add interface=wg-client list=VPN
+#   /interface list member add interface=wg-client list=DISCOVER
+
+# 1. This router's private key (generated on the hub)
+/interface wireguard set [find name=wg-client] private-key="{{ hub_peer_keys[item.name]['priv'] }}"
+
+# 2. Hub peer. allowed-address covers the overlay and the other sites'
+#    LAN supernets - it is the encryption/routing filter, not a routing
+#    table entry.
+/interface wireguard peers remove [find interface=wg-client]
+/interface wireguard peers add interface=wg-client \
+    public-key="{{ hub_keys['wg0.pub'] }}" \
+    preshared-key="{{ hub_peer_keys[item.name]['psk'] }}" \
+    endpoint-address={{ hub_public_endpoint }} endpoint-port={{ wg_port }} \
+    persistent-keepalive=25s \
+    allowed-address={{ ([wg_network] + peers | selectattr('lan_supernet', 'defined') | rejectattr('name', 'equalto', item.name) | map(attribute='lan_supernet') | list) | join(',') }}
+
+# 3. Overlay address
+/ip address set [find interface=wg-client] address={{ item.address }}/{{ wg_network.split('/')[1] }} network={{ wg_network.split('/')[0] }}
+
+# 4. Static routes to the other sites' LANs. RouterOS does NOT create
+#    routes from allowed-address, so they have to be explicit.
+{% for other in peers if other.lan_supernet is defined and other.name != item.name %}
+/ip route remove [find comment="{{ other.name }} LAN via hub"]
+/ip route add dst-address={{ other.lan_supernet }} gateway={{ hub_overlay_ip }} comment="{{ other.name }} LAN via hub"
+{% endfor %}
+
+# 5. Internal zone DNS: forward *.{{ wg_domain }} to the hub
+/ip dns static remove [find type=FWD name="{{ wg_domain }}"]
+/ip dns static add type=FWD name="{{ wg_domain }}" match-subdomain=yes forward-to={{ hub_overlay_ip }}

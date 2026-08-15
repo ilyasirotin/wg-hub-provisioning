@@ -1,8 +1,10 @@
 # Copy to vault.yml and encrypt:
 #   cp group_vars/all/vault.yml.example group_vars/all/vault.yml
-#   # paste the real token
+#   # paste the real profile id
 #   ansible-vault encrypt group_vars/all/vault.yml
 #
-# Token: Cloudflare dashboard -> My Profile -> API Tokens -> Create Token
-# -> "Edit zone DNS" template, scoped to the threadnull.dev zone only.
-cloudflare_dns_api_token: "CHANGE_ME"
+# NextDNS profile id: nextdns.io dashboard -> Setup -> "Endpoints" (the
+# six-character id in the DNS-over-* URLs). dnsmasq sends it as an EDNS0
+# option (add-cpe-id), so the profile is identified without a linked
+# source IP and survives a droplet IP change.
+nextdns_profile_id: "CHANGE_ME"

@@ -1,0 +1,47 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible. Overlay-only hub: no transit internet traffic, no NAT.
+
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        iif "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+
+        ip protocol icmp limit rate 20/second accept
+
+        # WireGuard handshakes from anywhere
+        udp dport {{ wg_port }} accept
+
+        # SSH - closed from the internet by the DO Cloud Firewall
+        tcp dport 22 accept
+
+        # Internal DNS - overlay only
+        iifname "{{ wg_interface }}" udp dport 53 accept
+        iifname "{{ wg_interface }}" tcp dport 53 accept
+
+        # node_exporter - overlay only
+        iifname "{{ wg_interface }}" tcp dport {{ node_exporter_port }} accept
+
+        log prefix "nft_input_drop: " counter drop
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+
+        ct state established,related accept
+        ct state invalid drop
+
+        # MSS clamping - prevents stalled sessions over PPPoE/VPN paths
+        tcp flags syn tcp option maxseg size set rt mtu
+
+        # Site-to-site and peer-to-peer traffic within the overlay.
+        # Nothing else forwards: no internet egress through this hub.
+        iifname "{{ wg_interface }}" oifname "{{ wg_interface }}" accept
+
+        log prefix "nft_forward_drop: " counter drop
+    }
+}

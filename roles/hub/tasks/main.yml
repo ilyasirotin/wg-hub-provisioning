@@ -1,0 +1,32 @@
+---
+# Overlay-only WireGuard hub on Debian 13. No NAT, no transit internet
+# traffic, no dynamic routing, no certificates: peers reach the overlay,
+# each other, and the LANs behind the site routers, and nothing else.
+- name: Validate the model
+  ansible.builtin.assert:
+    that:
+      - peers | map(attribute='name') | unique | length == peers | length
+      - peers | map(attribute='address') | unique | length == peers | length
+      - nextdns_profile_id is defined
+      - nextdns_profile_id != "CHANGE_ME"
+    fail_msg: >-
+      Peer names and addresses must be unique, and nextdns_profile_id must
+      be set in group_vars/all/vault.yml (see vault.yml.example).
+
+- name: System base
+  ansible.builtin.import_tasks: system.yml
+
+- name: WireGuard keys
+  ansible.builtin.import_tasks: keys.yml
+
+- name: WireGuard interface, routes and peer artefacts
+  ansible.builtin.import_tasks: wireguard.yml
+
+- name: Firewall
+  ansible.builtin.import_tasks: firewall.yml
+
+- name: DNS
+  ansible.builtin.import_tasks: dns.yml
+
+- name: Metrics
+  ansible.builtin.import_tasks: metrics.yml

@@ -1,0 +1,47 @@
+---
+- name: Restart sshd
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: restarted
+
+- name: Restart systemd-sysctl
+  ansible.builtin.systemd_service:
+    name: systemd-sysctl.service
+    state: restarted
+
+# Apply peer changes without tearing existing tunnels down. Changing
+# Address or ListenPort would need a full wg-quick restart - syncconf
+# does not pick those up.
+- name: Sync WireGuard peers
+  ansible.builtin.shell: |
+    set -o pipefail
+    if wg show {{ wg_interface }} > /dev/null 2>&1; then
+      wg syncconf {{ wg_interface }} <(wg-quick strip /etc/wireguard/{{ wg_interface }}.conf)
+    else
+      systemctl restart wg-quick@{{ wg_interface }}
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Restart wg0-routes
+  ansible.builtin.systemd_service:
+    name: wg0-routes
+    state: restarted
+    daemon_reload: true
+
+- name: Reload nftables
+  ansible.builtin.systemd_service:
+    name: nftables
+    state: reloaded
+
+- name: Restart dnsmasq
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    state: restarted
+    daemon_reload: true
+
+- name: Restart node_exporter
+  ansible.builtin.systemd_service:
+    name: prometheus-node-exporter
+    state: restarted

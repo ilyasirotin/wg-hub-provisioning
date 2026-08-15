@@ -1,6 +1,4 @@
 *.retry
-rendered/
-group_vars/all/vault.yml.plain
 .vault-pass
 
 # Python / tooling

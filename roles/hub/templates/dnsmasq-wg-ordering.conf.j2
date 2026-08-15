@@ -1,0 +1,23 @@
+[Unit]
+# Managed by Ansible. Load-bearing, debugged against a live failure.
+#
+# Before=  clears the packaged Before=nss-lookup.target.
+# Wants=   is deliberately ABSENT: it creates a stop-dependency cycle
+#          (nss-lookup.target -> dnsmasq -> wg-quick@{{ wg_interface }} -> network ->
+#          nss-lookup.target) that stops wg0 from shutting down cleanly.
+# PartOf=  re-binds dnsmasq when wg0 restarts. It propagates stop and
+#          restart only, adds no start ordering, and therefore does not
+#          reintroduce the cycle.
+Before=
+After=wg-quick@{{ wg_interface }}.service
+PartOf=wg-quick@{{ wg_interface }}.service
+
+[Service]
+# After= orders units, not kernel state: wg-quick reports success in the
+# same second the address is assigned, dnsmasq starts immediately after,
+# and bind-dynamic with no matching address present binds to nothing -
+# silently, with a perfectly normal-looking startup in the journal. Wait
+# for the address itself, bounded so a broken wg0 cannot hang boot.
+ExecStartPre=/bin/sh -c 'for i in $(seq 30); do ip -4 addr show dev {{ wg_interface }} 2>/dev/null | grep -q "{{ hub_overlay_ip | replace('.', '\\.') }}/" && exit 0; sleep 1; done; echo "{{ wg_interface }} address not ready" >&2; exit 1'
+Restart=on-failure
+RestartSec=5

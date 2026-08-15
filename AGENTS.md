@@ -4,111 +4,109 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Ansible automation for a hub-and-spoke WireGuard overlay (`10.99.0.0/24`,
-internal DNS zone `in.threadnull.dev`). A single Hetzner VPS "hub" relays
-between MikroTik home routers (sites), service VPSes, and personal devices.
+Ansible for a private WireGuard overlay (`10.99.0.0/24`, internal DNS zone
+`in.threadnull.dev`). One hub — a DigitalOcean droplet on Debian 13 — relays
+between MikroTik site routers, service VPSes, and personal devices. Peers reach
+the overlay, each other, and the LANs behind the site routers; nothing else.
 
-The whole network is described declaratively in **`group_vars/all/network.yml`** —
-that is the only file edited to add a peer, site, or service. Everything else
-(`wg0.conf`, nftables ACLs, routes/PBR, DNS zone, client `.conf`s, MikroTik
-`.rsc` snippets) is rendered from it. See `README.md` for the full operator
-workflow, address plan, and access model; this file covers what's needed to
-work on the code.
+The network is described in **`group_vars/all/network.yml`** — the only file
+edited to add or remove a peer. Everything else (`wg0.conf`, routes, nftables,
+the DNS zone, client `.conf`s, MikroTik `.rsc` snippets) is rendered from it.
+`README.md` has the operator workflow; this file covers working on the code.
+
+Four properties constrain the whole design. Violating any of them is a bug, not
+a feature request:
+
+1. **No peer reaches the internet through the hub.** No transit traffic, so no
+   NAT and no `nat` table. Client configs are split-tunnel — a generated config
+   containing `0.0.0.0/0` would black-hole the device.
+2. **Routing is static.** One path per site LAN, no failover, no dynamic
+   routing protocol. A dead site means an unreachable LAN and timeouts.
+3. **SSH stays on port 22.** The DigitalOcean Cloud Firewall closes it from the
+   internet and is managed in the DO panel, outside Ansible — so the playbook
+   must not assume it exists, and nftables accepts TCP 22 unconditionally.
+4. **The hub issues no certificates.** ACME lives on a service VPS.
 
 ## Environment & commands
 
-- Python/venv managed by **mise** (`mise.toml`, Python 3.12, auto-creates
-  `.venv` via uv). Entering the dir activates it.
-- Install: `pip install -r requirements.txt` and
-  `ansible-galaxy collection install -r requirements.yml`
-  (collections: `community.crypto`, `ansible.posix`).
-- Secrets live in `group_vars/all/vault.yml` (ansible-vault encrypted; copy
-  from `vault.yml.example`). Most runs need `--ask-vault-pass`.
+- Python/venv via **mise** (`mise.toml`, Python 3.12, `.venv` created by uv on
+  entering the directory).
+- Install: `pip install -r requirements.txt`. No Galaxy collections are used.
+- `group_vars/all/vault.yml` (ansible-vault) holds `nextdns_profile_id`; every
+  run needs `--ask-vault-pass`.
 
 ```bash
-# Lint (no test suite exists; ansible-lint is the gate)
-ansible-lint
-
-# Syntax / dry-run before applying
+bash scripts/smoke.sh all                      # ansible-lint + syntax check
 ansible-playbook playbooks/hub.yml --syntax-check
 ansible-playbook playbooks/hub.yml --check --diff --ask-vault-pass
-
-# Apply the hub (relay + firewall + DNS + certs)
 ansible-playbook playbooks/hub.yml --ask-vault-pass
-
-# Apply one service VPS
-ansible-playbook playbooks/services.yml --limit <host> --ask-vault-pass
 ```
 
-Bootstrap nuance: a fresh hub has sshd on port 22; the run moves it to 5860.
-First run only: `-e ansible_port=22`. Same pattern for service VPSes (public
-IP + port 22 on first contact, then switch `inventory.yml` to the wg address
-and `member_public_ssh: false`). `host_key_checking` is **on**.
+`ansible-lint` passes at the `production` profile and is the gate — there is no
+test suite. Non-Ansible directories are excluded in `.ansible-lint`.
+
+The inventory points at the overlay address (`10.99.0.1`, user `ops`, port 22),
+so the control machine must be a connected peer. First run on a fresh droplet:
+`-e ansible_host=<public-ip>`. `host_key_checking` is **on**. The `ops` account
+is created by hand before the first run (README, "Prerequisites"); Ansible only
+maintains its sudoers entry.
 
 ## Architecture
 
-Two playbooks, four roles, both playbooks start with `base_hardening`:
+One playbook, one role, six task files, executed in this order:
 
-- `playbooks/hub.yml` → `base_hardening` → `wg_hub` → `certs_hub`
-- `playbooks/services.yml` → `base_hardening` → `vpn_member`
+`playbooks/hub.yml` → `roles/hub` → `system.yml`, `keys.yml`, `wireguard.yml`,
+`firewall.yml`, `dns.yml`, `metrics.yml`.
 
-**The model → render pipeline (`roles/wg_hub`) is the core.** Read
-`roles/wg_hub/tasks/main.yml` top to bottom:
+The model is a flat list. `peers[]` entries have `name` and `address`, plus
+optional `lan_supernet` (presence means "this peer routes a LAN": it extends
+`AllowedIPs`, installs a route, and generates a `.rsc`) and `dns_name`
+(defaults to `name` with `_` → `-`). Each peer drives four rendered artefacts:
+a `[Peer]` block, a route, a `host-record`, and a config file. Keep new fields
+consistent with how the templates consume the list.
 
-1. `network.yml`'s `sites` (dict), `clients` (list), and `services` (list)
-   are flattened into a single `wg_all_peers` fact, each tagged with
-   `kind: site|client|service`. Most templates iterate this unified list.
-2. Keypairs + PSKs are generated **on the hub** (`creates:` guards make this
-   idempotent — keys are never regenerated), slurped back, and assembled into
-   `wg_peer_data` / `wg_server_keys` facts (all `no_log: true`). The hub is the
-   source of truth for all private material; `vpn_member` fetches a service's
-   key from the hub via `delegate_to`.
-3. Templates render config. Firewall, routing, and the tunnel are deliberately
-   split so peer edits don't restart the tunnel:
-   - `wg0.conf.j2` — interface + peers **only** (no PostUp firewall/routes).
-     Applied via the `Sync WireGuard peers` handler using `wg syncconf`.
-   - `wg0-routes.sh.j2` + a systemd unit bound to `wg-quick@wg0` — overlay
-     route, the policy-based routing rules (PBR table 123) for `profile: home`
-     clients' internet egress, and the table's fail-closed `unreachable` floor.
-     The actual exit default is elected via BGP from sites with
-     `exit_priority` (lower = preferred), and `wg-exit-sync.service` mirrors
-     the elected nexthop into WireGuard `AllowedIPs = 0.0.0.0/0` at runtime
-     (never rendered into `wg0.conf`).
-   - `nftables.conf.j2` — all access control. Validated with `nft -c` before
-     deploy.
+**Keys (`keys.yml`).** Generated on the hub under `umask 077`, guarded by
+`creates:` — an existing key is never regenerated, so a re-run cannot break a
+paired peer. Slurped back into `hub_keys` / `hub_peer_keys`; every task that
+touches key material uses `no_log: true`. Preserve that.
 
-**nftables zoning is generated from group membership.** `nftables.conf.j2`
-builds named sets (`admin_ips`, `user_ips`, `service_ips`, per-site `*_nets`,
-`iot_nets`) from the model and enforces the access matrix in README. A
-service's `ingress`/`egress` lists in `network.yml` directly become accept
-rules; `egress` with no `port` opens all ports to the target. `from:` accepts
-group names (`users`, `sites`, `iot`, `services`), a site id, or another
-service name. When changing access rules, edit `network.yml` and re-render —
-do not hand-edit rendered output.
+**Load-bearing details.** These were each debugged against a live failure:
 
-**DNS:** `dnsmasq` on the hub binds only the overlay IP and serves the internal
-zone, forwarding other queries to `dns_upstreams`. The hub's *own* resolver is
-deliberately decoupled — `/etc/resolv.conf` is pinned to `hub_resolvers` and
-made immutable (`chattr +i`) so the hub can always resolve ACME/apt even before
-any site peer is up.
-
-**Certificates (`certs_hub`):** `lego` on the hub gets a wildcard
-`*.in.threadnull.dev` via Cloudflare DNS-01 (token only on the hub), renewed by
-a daily timer. Service VPSes pull a read-only copy from `cert_publish_dir` over
-a restricted `rrsync` SSH account (`vpn_member` generates a key and authorizes
-it on the hub via `delegate_to`).
+- `Table = off` in `wg0.conf` keeps route management out of `wg-quick`, so peer
+  changes apply via the `Sync WireGuard peers` handler (`wg syncconf`) without
+  bouncing the interface and dropping every session. Adding a peer must never
+  interrupt existing ones.
+- No `Endpoint` for any peer — the hub learns them from handshakes.
+- `wg0-routes.service` is `BindsTo=wg-quick@wg0.service`, so routes are
+  withdrawn if WireGuard goes away.
+- `nftables.conf` is validated with `nft -c -f` before deploy; a malformed
+  ruleset applied directly locks the operator out. Forward keeps MSS clamping
+  (`tcp flags syn tcp option maxseg size set rt mtu`) for PPPoE/VPN paths.
+- `/etc/resolv.conf` is pinned to `hub_resolvers` and made immutable
+  (`chattr +i`), so a dnsmasq failure does not also break `apt`. Ansible clears
+  the flag before writing and restores it after.
+- The dnsmasq drop-in (`templates/dnsmasq-wg-ordering.conf.j2`): `Wants=` is
+  absent on purpose (stop-dependency cycle), `After=` alone is insufficient
+  (dnsmasq with `bind-dynamic` silently binds nothing if the address is not up
+  yet — hence the `ExecStartPre` wait loop), `PartOf=` re-binds on wg0 restart.
+- `/etc/sysctl.d/99-wg-hub.conf`: the `99-` prefix makes it win over
+  distribution defaults, and the runtime value is asserted afterwards — with
+  forwarding off the kernel drops forwarded packets before nftables sees them
+  while SSH keeps working, so the symptom points away from the cause.
 
 ## Conventions when editing
 
-- Changing `network.yml` requires running the relevant playbook to take effect;
-  there is no separate render step. Templates assume the peer-flattening and
-  group conventions above — keep new fields consistent with how `wg_all_peers`
-  and the nftables set-building loops consume the model.
-- Tasks that touch keys/configs use `no_log: true`; preserve that.
-- `*.priv`, `*.psk`, vault plaintext, and `rendered/` are gitignored.
-- Address-plan invariants (site N → router `10.99.0.1N`, LAN `10.N.<vlan>.0/24`,
-  `99` reserved for the overlay) are load-bearing for readability and for the
-  generated sets — follow them.
-
-`site_a_backup.rsc` / `site_b_backup.rsc` at the repo root are full MikroTik
-router config exports kept for reference, not rendered artifacts.
+- Changing `network.yml` requires running the playbook; there is no separate
+  render step.
+- Templates reproduce the hand-built hub's files closely on purpose, so a run
+  against the live host produces no surprising diff. Keep it that way.
+- Rendered artefacts stay on the hub in `/etc/wireguard/peers/` at mode `0600`;
+  `*.priv` and `*.psk` are gitignored and must never be committed.
+- Address-plan invariants (site router `10.99.0.1N`, LAN supernet
+  `10.N.0.0/16`, VLANs `10.N.<vlan>.0/24`, `99` reserved for the overlay) are
+  load-bearing for readability — follow them.
+- `grafana/`, `logs-elk/`, `metrics-mikrotik/`, `prometheus/`, `routeros/`
+  configure machines this repository does not provision. Do not refactor them
+  as part of hub work.
+- `debian-hub-guide.md` documents building the same hub by hand and configuring
+  the MikroTik side; keep it in sync when the design changes.

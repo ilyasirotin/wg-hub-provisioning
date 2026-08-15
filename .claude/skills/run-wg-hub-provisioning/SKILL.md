@@ -5,30 +5,24 @@ description: run, lint, syntax-check, test, verify wg-hub-provisioning Ansible p
 
 # run-wg-hub-provisioning
 
-Ansible IaC project — no GUI, no server to start. The "app" is the playbooks and roles.
-The driver is `scripts/smoke.sh` (CLI smoke script). It validates Jinja2/YAML syntax
-and runs ansible-lint. A full `--check --diff` dry-run requires SSH to the live hub.
+Ansible IaC project — no GUI, no server to start. The "app" is one playbook
+(`playbooks/hub.yml`) and one role (`roles/hub`). The driver is
+`scripts/smoke.sh`, which validates YAML/Jinja2 syntax and runs ansible-lint.
+Applying anything to the real hub requires SSH to it over the overlay.
 
 All paths are relative to repo root.
 
 ## Prerequisites
 
-Python 3.12 venv already in `.venv/` (mise + uv). No extra OS packages needed.
-Collections are pre-installed in `.venv/.ansible/collections`.
-
-## Setup
-
-```bash
-cd ~/Projects/wg-hub-provisioning
-source .venv/bin/activate
-ansible-galaxy collection install -r requirements.yml   # idempotent; says "Nothing to do" if current
-```
+Python 3.12 venv already in `.venv/` (mise + uv). No Galaxy collections are
+used — `pip install -r requirements.txt` is the whole setup.
 
 ## Run (agent path — primary)
 
 ```bash
-bash scripts/smoke.sh            # syntax-check both playbooks (default)
-bash scripts/smoke.sh lint       # ansible-lint — exits non-zero with violations
+cd ~/Projects/wg-hub-provisioning
+bash scripts/smoke.sh            # syntax-check the playbook (default)
+bash scripts/smoke.sh lint       # ansible-lint — exits non-zero on violations
 bash scripts/smoke.sh all        # lint then syntax-check
 ```
 
@@ -36,60 +30,58 @@ The script auto-detects whether `~/.ansible/tmp` is writable. If not (e.g. in a
 sandbox with a read-only home), it creates a `mktemp -d` directory and sets
 `ANSIBLE_LOCAL_TEMP` automatically — no manual intervention needed.
 
-**Expected output for syntax-check (success):**
+**Expected output (success):**
 
 ```
+==> ansible-lint
+Passed: 0 failure(s), 0 warning(s) …
+Lint OK.
 ==> syntax-check: hub.yml
 
 playbook: playbooks/hub.yml
-==> syntax-check: services.yml
-
-playbook: playbooks/services.yml
 Syntax OK.
 ```
 
-Ansible prints the playbook path and exits 0 — no further output means success.
-
-**Expected pre-refactor state for lint:**
-
-```
-Failed: 28 failure(s) …   ← exits 1
-```
-
-After fixing all lint violations, `bash scripts/smoke.sh all` should exit 0.
+Ansible prints the playbook path and exits 0 — that IS the success output.
+ansible-lint must stay clean at the `production` profile; non-Ansible
+directories are excluded in `.ansible-lint`.
 
 ## Dry-run against the live hub (human path)
 
-Requires vault password and SSH reachability (hub at 10.99.0.1:5860 via WireGuard).
+Requires the vault password and overlay reachability (hub at `10.99.0.1:22`,
+user `ops`, passwordless sudo).
 
 ```bash
 ansible-playbook playbooks/hub.yml --check --diff --ask-vault-pass
-ansible-playbook playbooks/services.yml --check --diff --ask-vault-pass --limit <host>
 ```
 
-First-run bootstrap (fresh server, sshd still on port 22):
+Expect zero changed tasks against a converged hub. Any diff in `wg0.conf`,
+`nftables.conf`, `wg-internal.conf` or `wg0-routes.sh` means a template drifted
+from the deployed state — investigate before applying.
+
+First run on a fresh droplet (no overlay yet):
 
 ```bash
-ansible-playbook playbooks/hub.yml -e ansible_port=22 --ask-vault-pass
+ansible-playbook playbooks/hub.yml -e ansible_host=<droplet-public-ip> --ask-vault-pass
 ```
+
+## Verifying the result
+
+```bash
+ssh hub.in.threadnull.dev 'systemctl is-active wg-quick@wg0 wg0-routes nftables dnsmasq prometheus-node-exporter'
+ssh hub.in.threadnull.dev 'sudo wg show wg0 latest-handshakes'   # before and after a run
+```
+
+Applying peer changes must not reset handshakes — they are pushed with
+`wg syncconf`, not by restarting the interface.
 
 ## Gotchas
 
-- **`ANSIBLE_LOCAL_TEMP` not `HOME`** — ansible ignores `HOME` for temp files in some
-  versions; the correct override is `ANSIBLE_LOCAL_TEMP`. `scripts/smoke.sh` handles
-  this automatically via the probe-and-fallback logic.
-- **`mktemp` requires a writable `/tmp`** — in a Claude Code sandbox `/tmp` may also
-  be read-only except for a specific scratchpad path. In that case pass the writable
-  path explicitly: `ANSIBLE_LOCAL_TEMP=/path/to/writable bash scripts/smoke.sh syntax`
-- **ansible-lint warns about vault.yml decryption** — `WARNING: Ignored exception …
-  Decryption failed` is normal when running without `--ask-vault-pass`. Not an error.
-- **`ansible-galaxy: Nothing to do`** — collections are already installed under
-  `.venv/.ansible/collections`; that's correct.
-- **"playbook: …" with no error after `--syntax-check`** — that IS the success output.
-  Ansible just prints the playbook path and exits 0.
-
-## Troubleshooting
-
-**`[Errno 30] Read-only file system: '~/.ansible/tmp/…'`**
-→ `export ANSIBLE_LOCAL_TEMP=/tmp/writable-dir` before running, or let `smoke.sh`
-  handle it (it probes writability and falls back to `mktemp` automatically).
+- **`ANSIBLE_LOCAL_TEMP`, not `HOME`** — ansible ignores `HOME` for temp files;
+  `scripts/smoke.sh` probes writability and falls back automatically.
+- **`mktemp` needs a writable `/tmp`** — in a sandbox pass the writable path
+  explicitly: `ANSIBLE_LOCAL_TEMP=/path/to/writable bash scripts/smoke.sh`.
+- **ansible-lint warns about vault.yml decryption** — `WARNING: Ignored
+  exception … Decryption failed` is normal without `--ask-vault-pass`.
+- **The playbook needs `nextdns_profile_id`** from `group_vars/all/vault.yml`;
+  the role asserts it is set and not `CHANGE_ME`.

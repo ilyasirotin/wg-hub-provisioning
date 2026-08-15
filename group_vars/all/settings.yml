@@ -1,41 +1,29 @@
-# Operational settings (rarely change)
+# Operational settings (rarely change).
 
-ssh_port: 5860
+# Service account the playbook runs as. Created by hand before the first
+# run (see README, "Prerequisites") - Ansible only maintains its sudoers
+# entry.
+ops_user: ops
 
-# SSH on the hub's public interface.
-# true  = needed for bootstrap (fresh server).
-# false = SSH only via wg0; emergency access via Hetzner console.
-# Flip to false and re-run hub.yml once `ssh -p 5860 wg@10.99.0.1` works.
-hub_public_ssh: false
-
-# Where dnsmasq forwards everything that is not {{ wg_domain }}.
-# 10.99.0.11 = router A (keeps NextDNS filtering for VPN clients),
-# 1.1.1.1 as fallback when house A is unreachable.
-dns_upstreams:
-  - 10.99.0.11
-  - 1.1.1.1
-
-# The hub's OWN system resolver (independent of dnsmasq / the overlay).
-# Public servers so the hub can always resolve Let's Encrypt, apt, etc.,
-# even during bootstrap before any site peer is connected.
+# The hub's OWN system resolver, independent of dnsmasq and the overlay.
+# Public servers so apt and outbound requests always resolve, even when
+# dnsmasq is down or no peer is connected. Written to /etc/resolv.conf,
+# which is then made immutable.
 hub_resolvers:
   - 1.1.1.1
   - 8.8.8.8
 
-# ACME / Let's Encrypt
-acme_email: me@threadnull.dev
-lego_version: "5.2.2"
-cert_domains:
-  - "*.in.threadnull.dev"
-# Cloudflare API token lives in group_vars/all/vault.yml (ansible-vault):
-#   cloudflare_dns_api_token: "..."
+# Where dnsmasq forwards everything outside {{ wg_domain }}. Queried by
+# the hub itself, so resolution never depends on a site being reachable.
+# NextDNS anycast first, Cloudflare as a last-resort fallback.
+# IPv4 only: with strict-order an unreachable IPv6 upstream listed first
+# stalls every lookup on a droplet without IPv6.
+dns_upstreams:
+  - 45.90.28.0
+  - 45.90.30.0
+  - 1.1.1.1
 
-# Directory on the hub that members pull the certificate from (rsync, RO)
-cert_publish_dir: /var/lib/wg-certs
-cert_sync_user: certsync
-
-# Prometheus metrics from the hub (roles/metrics_hub): node_exporter +
-# wireguard/exit-failover/bgp textfile collectors, scraped over the overlay
-# by the services listed in metrics_hub_scrapers (default: "metrics").
-# false -> exporters stopped, the nftables scrape hole is not rendered.
-hub_metrics_enabled: true
+# node_exporter binds the overlay address only; nftables opens this port
+# to wg0. System metrics only - WireGuard peer state is read from
+# `wg show` by the admin panel, not scraped.
+node_exporter_port: 9100

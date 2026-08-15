@@ -1,0 +1,17 @@
+---
+# System metrics only (CPU, memory, disk, interfaces, unit states), bound
+# to the overlay address. WireGuard peer state is read from `wg show` by
+# the admin panel, not scraped.
+- name: Bind node_exporter to the overlay address
+  ansible.builtin.copy:
+    dest: /etc/default/prometheus-node-exporter
+    mode: "0644"
+    content: |
+      ARGS="--web.listen-address={{ hub_overlay_ip }}:{{ node_exporter_port }}"
+  notify: Restart node_exporter
+
+- name: Enable and start node_exporter
+  ansible.builtin.systemd_service:
+    name: prometheus-node-exporter
+    enabled: true
+    state: started

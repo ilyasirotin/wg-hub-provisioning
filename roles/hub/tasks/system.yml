@@ -1,0 +1,90 @@
+---
+# Packages, service account, sshd, unattended upgrades, IP forwarding.
+# No firewall here - the whole ruleset lives in firewall.yml.
+# Refreshing the package index is not a change to the host: reporting it
+# as one would hide whether a run actually did anything.
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  changed_when: false
+
+- name: Install packages
+  ansible.builtin.apt:
+    name:
+      - wireguard
+      - nftables
+      - dnsmasq
+      - qrencode
+      - curl
+      - prometheus-node-exporter
+      - unattended-upgrades
+    state: present
+
+# ufw would manage a competing ruleset on top of /etc/nftables.conf.
+# resolvconf exists to register resolvers with systemd-resolved, which is
+# disabled here; leaving it installed makes dnsmasq log a failure on every
+# start.
+- name: Purge conflicting packages
+  ansible.builtin.apt:
+    name:
+      - ufw
+      - resolvconf
+    state: absent
+    purge: true
+
+- name: Grant the service account passwordless sudo
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ ops_user }}"
+    mode: "0440"
+    content: "{{ ops_user }} ALL=(ALL) NOPASSWD:ALL\n"
+    validate: visudo -cf %s
+
+# Port stays at the default 22: it is closed from the internet by the
+# DigitalOcean Cloud Firewall, and moving it would only break the
+# emergency console workflow.
+- name: Configure sshd
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/90-hardening.conf
+    mode: "0644"
+    content: |
+      PermitRootLogin prohibit-password
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      X11Forwarding no
+  notify: Restart sshd
+
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+# Required for the site-to-site relay. The 99- prefix makes the file load
+# after every distribution default, so it wins any conflict.
+- name: Deploy sysctl drop-in for IPv4 forwarding
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-wg-hub.conf
+    mode: "0644"
+    content: "net.ipv4.ip_forward = 1\n"
+  notify: Restart systemd-sysctl
+
+- name: Apply pending sysctl changes now
+  ansible.builtin.meta: flush_handlers
+
+# With forwarding off the kernel drops forwarded packets before nftables
+# ever sees them, while SSH to the hub keeps working - the symptom points
+# away from the cause, so assert the runtime value rather than trusting
+# the file.
+- name: Read the runtime forwarding state
+  ansible.builtin.command: /usr/sbin/sysctl -n net.ipv4.ip_forward
+  register: hub_ip_forward
+  changed_when: false
+  check_mode: false
+
+- name: Assert IPv4 forwarding is on
+  ansible.builtin.assert:
+    that: hub_ip_forward.stdout | trim == "1"
+    fail_msg: "net.ipv4.ip_forward is off - site-to-site traffic will be dropped silently"

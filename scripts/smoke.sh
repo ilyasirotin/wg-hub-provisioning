@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Smoke driver for wg-infra Ansible project.
+# Smoke driver for the wg-hub-provisioning Ansible project.
 # Usage:
-#   scripts/smoke.sh            — syntax-check both playbooks (default)
+#   scripts/smoke.sh            — syntax-check the playbook (default)
 #   scripts/smoke.sh lint       — ansible-lint (exits 0 only when lint-clean)
 #   scripts/smoke.sh all        — lint then syntax-check
 #
@@ -29,8 +29,6 @@ MODE="${1:-syntax}"
 run_syntax() {
   echo "==> syntax-check: hub.yml"
   ansible-playbook playbooks/hub.yml --syntax-check
-  echo "==> syntax-check: services.yml"
-  ansible-playbook playbooks/services.yml --syntax-check
   echo "Syntax OK."
 }
 

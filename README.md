@@ -1,265 +1,265 @@
 # wg-hub-provisioning
 
-Declarative WireGuard overlay: a hub VPS (Hetzner) ties together MikroTik
-home sites, service VPSes, and personal devices. Internal DNS zone
-`in.threadnull.dev`, wildcard Let's Encrypt cert.
+Ansible for a private WireGuard overlay. One hub (a DigitalOcean droplet
+running Debian 13) lets peers reach the overlay, each other, and the LANs
+behind the site routers. That is the entire purpose.
 
-The only file you edit to change the network is
-`group_vars/all/network.yml`. Everything else is generated: the hub
-`wg0.conf`, nftables ACLs, routes/PBR, the DNS zone, client configs, and
-ready-to-paste MikroTik snippets.
+The network lives in `group_vars/all/network.yml`. Everything else — the
+`[Peer]` blocks, the routes, the internal DNS zone, the client configs,
+the MikroTik snippets — is generated from it.
+
+## What this hub is not
+
+- **Not an internet gateway.** No peer reaches the internet through the
+  hub. There is no NAT and no `nat` table, and client configs are
+  split-tunnel: `AllowedIPs` contains private ranges only. A generated
+  config containing `0.0.0.0/0` would be a bug — it would push the
+  device's whole internet traffic into a hub that drops it.
+- **Not dynamically routed.** Each site LAN has exactly one path, through
+  its own site router, so there is nothing to fail over to. When a site
+  is down its LAN is unreachable and packets to it time out; when it
+  returns, everything resumes without intervention. Site liveness is
+  visible in `wg show wg0 latest-handshakes`.
+- **Not a certificate authority.** ACME lives on a service VPS. Nothing
+  on the hub touches certificate material.
 
 ## Address plan
 
 ```
-Overlay (WireGuard)        10.99.0.0/24
+Overlay (WireGuard)        10.99.0.0/24, UDP 51820
   10.99.0.1                hub
-  10.99.0.11 - .19         site routers   (site N -> 10.99.0.1N)
-  10.99.0.20 - .99         personal clients
+  10.99.0.11 - .19         site routers
+  10.99.0.20 - .99         personal devices
   10.99.0.100 - .199       service VPSes
 Site LANs                  10.<site>.0.0/16
   VLAN k of site N         10.N.<k>.0/24
+Internal zone              in.threadnull.dev
 ```
 
-`10.2.30.57` reads instantly as site 2 (house B), VLAN 30 (IoT). 99 is
-reserved for the overlay, so site numbers 1-9 never collide. Adding a
-third/fourth/fifth house is a copy-paste of a site block with a new number.
+`10.2.30.57` reads as site 2, VLAN 30 at a glance. The ranges are a
+readability convention only — every peer has identical, unrestricted
+access to the overlay. There are no groups, roles, or egress profiles.
 
 ## Layout
 
 ```
-group_vars/all/network.yml    # the model: peers, groups, ingress/egress
-group_vars/all/settings.yml   # operational settings
-group_vars/all/vault.yml      # secrets (ansible-vault), see *.example
-playbooks/hub.yml             # hub: bare relay (WG + nftables + dnsmasq + certs + BGP)
-playbooks/services.yml        # service VPSes (vpn_member role)
-roles/base_hardening          # ssh, fail2ban, unattended-upgrades
-roles/wg_hub                  # wg0/nftables/routes/DNS + MikroTik snippets
-roles/frr_hub                 # FRRouting (bgpd): dynamic LAN routing via eBGP
-roles/certs_hub               # wildcard cert + read-only publication
-roles/vpn_member              # service VPS: WG, firewall, cert-sync, nginx
+group_vars/all/network.yml   # the model: peers and addressing
+group_vars/all/settings.yml  # operational settings
+group_vars/all/vault.yml     # NextDNS profile id (ansible-vault), see *.example
+inventory.yml                # one host
+playbooks/hub.yml            # the only playbook
+roles/hub/                   # the whole hub
+  tasks/system.yml           #   packages, sudoers, sshd, sysctl
+  tasks/keys.yml             #   key generation (idempotent) and readback
+  tasks/wireguard.yml        #   wg0.conf, routes, client/MikroTik artefacts
+  tasks/firewall.yml         #   nftables
+  tasks/dns.yml              #   resolv.conf, dnsmasq
+  tasks/metrics.yml          #   node_exporter
+debian-hub-guide.md          # the same hub built by hand, plus MikroTik setup
 ```
 
 ## Prerequisites
 
-The hub is a fresh Debian 12/13 server with one thing done by hand: a user
-`wg` with passwordless sudo and your SSH key.
+On the control machine: Python 3.12 (mise creates `.venv` on `cd`), then
+`pip install -r requirements.txt`.
+
+On a fresh droplet, one manual step before the first run — the service
+account, as root:
 
 ```bash
-adduser wg && usermod -aG sudo wg
-mkdir -p /home/wg/.ssh && cp ~/.ssh/authorized_keys /home/wg/.ssh/
-chown -R wg:wg /home/wg/.ssh
-echo 'wg ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/wg
+adduser ops && usermod -aG sudo ops
+mkdir -p /home/ops/.ssh && cp ~/.ssh/authorized_keys /home/ops/.ssh/
+chown -R ops:ops /home/ops/.ssh && chmod 700 /home/ops/.ssh
+chmod 600 /home/ops/.ssh/authorized_keys
+echo 'ops ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ops && chmod 0440 /etc/sudoers.d/ops
 ```
 
-Control machine:
+Ansible maintains that sudoers entry afterwards but never creates the
+account: locking yourself out of a host you cannot SSH into is not
+something a playbook should be able to do.
+
+Secrets: copy `group_vars/all/vault.yml.example` to `vault.yml`, put the
+NextDNS profile id in it, `ansible-vault encrypt` it. Every run needs
+`--ask-vault-pass`.
+
+## Running it
 
 ```bash
-pip install -r requirements.txt
-ansible-galaxy collection install -r requirements.yml
-cp group_vars/all/vault.yml.example group_vars/all/vault.yml
-ansible-vault encrypt group_vars/all/vault.yml
+# First run: no overlay yet, so reach the droplet on its public address
+ansible-playbook playbooks/hub.yml -e ansible_host=<droplet-public-ip> --ask-vault-pass
+
+# Afterwards: the inventory points at the overlay
+ansible-playbook playbooks/hub.yml --ask-vault-pass
+
+# Dry run
+ansible-playbook playbooks/hub.yml --check --diff --ask-vault-pass
+
+# Lint and syntax check (no test suite; ansible-lint is the gate)
+bash scripts/smoke.sh all
 ```
 
-## First run
+Once the overlay works and `ssh ops@10.99.0.1` succeeds through it, close
+public SSH: **DO panel → Networking → Firewalls → Create Firewall**,
+attached to the droplet, inbound `UDP 51820` from all IPv4/IPv6 and
+**no** rule for TCP 22. The Cloud Firewall is managed there, not by this
+playbook — nftables accepts TCP 22 unconditionally. Emergency access is
+the DO web console, which no network rule can lock you out of.
 
-Preconditions on a fresh server:
-- the `wg` user exists with your key and passwordless sudo
-  (INSTALLATION.md step 0; run once as root);
-- `hub_public_ssh: true` in `group_vars/all/settings.yml` (public SSH stays
-  open until the overlay works);
-- cloud-init/apt has settled: `cloud-init status --wait`.
+## Adding a peer
 
-sshd still listens on 22 and the inventory points at the overlay IP, so
-both are overridden once; the run moves sshd to 5860.
-
-```bash
-ansible-playbook playbooks/hub.yml \
-  -e ansible_host=<hub-public-ip> -e ansible_port=22 --ask-vault-pass
-```
-
-Verify:
-- `wg show` lists peers and handshakes;
-- mobile_cloud reaches the internet with the VPS IP; mobile_home with the
-  home IP;
-- `dig hub.in.threadnull.dev @10.99.0.1` answers from the zone;
-- `ip route show table 123` has the elected default over the unreachable
-  floor and `journalctl -u wg-exit-sync` shows the exit flip;
-- the wildcard cert exists under `/var/lib/wg-certs`.
-
-Then set `hub_public_ssh: false` in settings.yml and re-run (no `-e`
-overrides — the overlay works now); only UDP/51820 stays open to the
-internet.
-
-## Reinstalling the hub (fresh OS, same VPS)
-
-The hub is the source of truth for all WireGuard private material: with
-`/etc/wireguard` restored, every router and phone reconnects unchanged;
-without it, new keys are generated and **every peer must be re-paired**
-(re-paste each site's `.rsc`, re-QR every client).
-
-```bash
-# 1. Before wiping: back up keys + certificates (as long as the hub is alive)
-ssh hub.in.threadnull.dev 'sudo tar czf - /etc/wireguard /var/lib/lego' > hub-backup.tgz
-
-# 2. Reinstall the OS from the provider panel, then as root:
-#    INSTALLATION.md step 0 (wg user + sudo), cloud-init status --wait
-
-# 3. The host key changed — clear the old ones locally (host_key_checking is on)
-ssh-keygen -R <hub-public-ip> && ssh-keygen -R '[<hub-public-ip>]:5860' && ssh-keygen -R 10.99.0.1
-
-# 4. Restore the backup (skip to re-key everything instead)
-scp hub-backup.tgz wg@<hub-public-ip>:/tmp/ && \
-  ssh wg@<hub-public-ip> 'sudo tar xzf /tmp/hub-backup.tgz -C / && sudo rm /tmp/hub-backup.tgz'
-
-# 5. Proceed exactly as in "First run" above
-```
-
-Restoring `/var/lib/lego` keeps the Let's Encrypt account and current
-wildcard cert (no reissue, no rate-limit exposure). Site routers and
-clients need nothing: same hub public key, same endpoint — tunnels and
-BGP sessions come back on their own, and wg-exit-sync re-elects the exit
-within seconds of BGP convergence.
-
-## Adding a site (house)
-
-1. Copy a block under `sites:` in network.yml, pick the next `number` and
-   `ip` (`10.99.0.1N`), list its LAN subnets as `10.N.<vlan>.0/24`.
-2. `ansible-playbook playbooks/hub.yml` — generates the peer, ACLs, DNS,
-   and `/etc/wireguard/clients/<site>.rsc` on the hub.
-3. On the new router: paste the rendered `.rsc` in the MikroTik terminal.
-   The snippet configures WireGuard **and** eBGP in one pass — the hub
-   learns the site's LAN supernet (`10.N.0.0/16`) via BGP automatically.
-   Confirm the handshake and check `vtysh -c "show bgp summary"` on the hub.
-
-## Adding a personal client (family)
-
-1. Add to `clients:` - `group: user` for family (internet + only services
-   that allow `users`, no LAN, no router access), `group: admin` for you.
-2. `ansible-playbook playbooks/hub.yml`.
-3. `qrencode -t ansiutf8 < /etc/wireguard/clients/<name>.conf` and scan it
-   in the WireGuard app. That is the whole onboarding.
-
-## Adding a service
-
-This is a two-phase process: bootstrap over the public IP, then lock down
-to overlay-only once the tunnel is verified.
-
-> **Invariant:** run `hub.yml` before `services.yml` whenever `network.yml`
-> changes. The hub's nftables forward rules are generated from `network.yml`;
-> skipping `hub.yml` leaves the hub dropping traffic to the new ports.
-
-### Phase 1 — Bootstrap (public IP)
-
-1. Add the service block under `services:` in `network.yml` (overlay IP,
-   `dns_names`, `ingress`/`egress`, `nginx`/`nginx_upstream` if needed).
-2. Add the host to `inventory.yml → services.hosts`:
-   - `ansible_host`: public IP (from Hetzner panel)
-   - `ansible_port: 5860` — base_hardening moves sshd from 22 → 5860
-     mid-play via a handler; do **not** use `-e ansible_port=22` (that
-     would override the hub port and break `delegate_to` tasks)
-   - `service_name`: the `name:` key from step 1
-   - Leave `member_public_ssh` absent/commented (defaults to `true`,
-     keeping bootstrap SSH open on all interfaces)
-3. `ansible-playbook playbooks/hub.yml --ask-vault-pass` — generates the
-   WireGuard keypair + PSK on the hub, adds the peer to `wg0.conf` via
-   `wg syncconf`, creates nftables forward rules for every declared
-   ingress/egress port, adds the DNS A record.
-4. `ansible-playbook playbooks/services.yml --limit <host> --ask-vault-pass -K`
-   — joins the overlay (WireGuard up), deploys the member nftables (bootstrap
-   SSH still open), syncs the wildcard cert from the hub, brings up nginx if
-   `nginx: true`. Deploy the backend service listening on `nginx_upstream`.
-   Verify `https://<name>.in.threadnull.dev` and SSH from the VPN.
-
-### Phase 2 — Lock down (overlay only)
-
-5. In `inventory.yml`, update the host entry:
-   - `ansible_host`: overlay IP (e.g. `10.99.0.100`)
-   - Uncomment `member_public_ssh: false`
-6. If `network.yml` was also updated (e.g. adding ingress ports while
-   verifying in Phase 1), run `hub.yml` first to push those changes to the
-   hub's nftables before the service VPS closes its public door:
-   `ansible-playbook playbooks/hub.yml --ask-vault-pass`
-7. `ansible-playbook playbooks/services.yml --limit <host> --ask-vault-pass -K`
-   — redeploys the member nftables with `member_public_ssh: false`, removing
-   the bootstrap `tcp dport 22/5860 accept` rules on all interfaces. SSH and
-   web traffic are now overlay-only. Mirror with an empty/deny-all Hetzner
-   Cloud Firewall on the VPS for belt-and-suspenders public closure.
-
-## Access model (hub nftables)
-
-| Group     | Access |
-|-----------|--------|
-| admin     | everything: overlay, all LANs, internet via hub/home |
-| user      | internet only + services that list `users`; no LANs, no routers |
-| sites     | site-to-site between LANs; services only on declared ports |
-| services  | declared ingress/egress only; LANs closed by default |
-| iot       | only declared ports of specific services |
-
-A service's `egress` with no `port` opens all ports toward the target -
-that is what lets Home Assistant reach IoT devices for vacuum control,
-3D-printer cameras, ESPHome, etc.
-
-## Monitoring (optional)
-
-`hub_metrics_enabled: true` in `group_vars/all/settings.yml` (default here,
-`false` if unset) makes the hub export Prometheus metrics on `:9100`,
-reachable over the overlay only from the services listed in
-`metrics_hub_scrapers` (default: `metrics`):
-
-- **node_exporter** — CPU, RAM, disk, network (Debian package, managed by
-  `roles/metrics_hub`);
-- **wireguard.prom** — per-peer latest handshake / rx / tx with `peer` and
-  `kind` (site/client/service) labels, `wireguard_exit_active{site}`,
-  `wireguard_exit_default_present` (fail-closed indicator);
-- **bgp.prom** — `bgp_peer_up`, `bgp_peer_prefixes_received`,
-  `bgp_peer_uptime_seconds` per site.
-
-The textfile collectors refresh every `metrics_hub_interval` (15s) via a
-systemd timer — no extra exporter daemons. Prometheus/Grafana on the
-`metrics` VPS are managed by hand; add the scrape job to
-`/etc/prometheus/prometheus.yml` yourself:
+Append to `peers:` in `group_vars/all/network.yml`:
 
 ```yaml
-  - job_name: wg-hub
-    static_configs:
-      - targets: ['10.99.0.1:9100']
+  - name: pixel
+    address: 10.99.0.20
 ```
 
-Useful queries: site tunnel dead —
-`time() - wireguard_peer_latest_handshake_seconds{kind="site"} > 300`;
-exit failed over — `wireguard_exit_active{site!="site_a"} == 1`;
-home clients fail-closed — `wireguard_exit_default_present == 0`.
+Add `lan_supernet: 10.3.0.0/16` if the peer routes a LAN — that installs
+the route and generates a MikroTik snippet. Add `dns_name:` if the DNS
+label should differ from the peer name (`_` becomes `-` by default).
 
-Telegram alerting (Prometheus rules + Alertmanager, alerts-as-code) lives
-in `prometheus/` — rules, Alertmanager config, message template and the
-step-by-step setup guide (`prometheus/ALERTING.md`, RU).
+Re-run the playbook. Peer changes are applied with `wg syncconf`, so
+**existing sessions are not interrupted** — verify with
+`wg show wg0 latest-handshakes` before and after. Then hand the device
+its config from the hub:
 
-A ready-made Grafana dashboard lives in `grafana/wg-hub-dashboard.json`
-(exit status, failover timeline, per-peer handshakes/traffic, BGP):
-Dashboards → New → Import → Upload JSON file. For system metrics import
-dashboard ID 1860 (Node Exporter Full) and pick the `wg-hub` job.
+```bash
+sudo cat /etc/wireguard/peers/pixel.conf          # laptops, servers
+sudo qrencode -t ansiutf8 < /etc/wireguard/peers/pixel.conf   # phones
+sudo cat /etc/wireguard/peers/site_c.rsc          # MikroTik: paste in Safe Mode
+```
 
-## Certificates
+Every private key stays on the hub; the rendered files are `0600` and
+never leave it except as you copy them.
 
-lego on the hub, DNS-01 via Cloudflare, renewed by a daily timer. The
-Cloudflare token lives only on the hub. Service VPSes pull a read-only copy from
-`/var/lib/wg-certs` over a restricted `certsync` rsync account.
+### Rotating a peer's key
 
-## Notes
+```bash
+sudo rm /etc/wireguard/peers/<name>.{priv,pub,psk}
+```
 
-- Peer changes apply via `wg syncconf` (no tunnel restart). Changing
-  `ListenPort`/`Address` needs `systemctl restart wg-quick@wg0`.
-- Site LAN routes (`10.N.0.0/16`) are installed on the hub dynamically
-  via eBGP (FRRouting). When a site tunnel drops, BGP withdraws its routes
-  automatically — no blackholing. `wg0-routes.sh` only handles the overlay
-  subnet and the PBR table 123 fail-closed floor (home-profile internet egress).
-- Home-profile internet egress **fails over automatically** between sites
-  with `exit_priority` (lower = preferred, preempts on recovery): exit sites
-  announce `0.0.0.0/0` via BGP, FRR elects the best default into table 123,
-  and `wg-exit-sync` mirrors it into WireGuard AllowedIPs. Detection is
-  bounded by the BGP hold timer (~15s). If no exit site is available, home
-  clients fail closed (no leak via the hub's own IP).
-- Single point of failure is the hub by design (NAT/dynamic-IP routers
-  cannot peer directly). If the hub dies, sites keep their own WAN; only
-  cross-site and service access pause until it returns.
+Re-run the playbook — the `creates:` guards only skip keys that exist, so
+the missing set is regenerated and everything downstream is re-rendered.
+Deliver the new config to the device.
+
+## Verifying the hub
+
+```bash
+sysctl net.ipv4.ip_forward                     # 1
+systemctl is-active wg-quick@wg0 wg0-routes nftables dnsmasq prometheus-node-exporter
+sudo wg show                                   # handshake per peer, under 2 min
+ip route show | grep wg0                       # overlay + one route per site LAN
+ss -ulnp | grep ':53'                          # 10.99.0.1:53
+dig +short @10.99.0.1 hub.in.threadnull.dev    # internal zone
+dig +short @10.99.0.1 example.com              # upstream
+curl -s 10.99.0.1:9100/metrics | head -3       # node_exporter
+sudo nft list ruleset                          # one inet filter table, no nat
+```
+
+Site-to-site separately: from a host in site A's LAN, ping a host in site
+B's LAN.
+
+## How it is put together
+
+**Keys.** Generated on the hub, guarded by `creates:` — an existing key
+is never regenerated, so a re-run can not break a paired peer. The hub is
+the source of truth for all private material; tasks that touch it use
+`no_log`.
+
+**`Table = off` in `wg0.conf`.** Route management is deliberately kept
+out of `wg-quick` so that peer changes can be applied with
+`wg syncconf wg0 <(wg-quick strip /etc/wireguard/wg0.conf)` instead of
+bouncing the interface and dropping every session.
+
+**Routes** live in `/usr/local/sbin/wg0-routes.sh`, driven by
+`wg0-routes.service`, which is `BindsTo=wg-quick@wg0.service` — if
+WireGuard goes away the routes go with it, so nothing points at a dead
+interface.
+
+**nftables** is one `inet filter` table with `policy drop` on input and
+forward. Forward accepts only `wg0 -> wg0` plus MSS clamping (`tcp flags
+syn tcp option maxseg size set rt mtu`), which prevents stalled sessions
+over PPPoE and VPN paths. The ruleset is validated with `nft -c -f`
+before it is applied: a malformed one applied directly can lock you out
+of the host.
+
+**DNS** is split in two on purpose. `dnsmasq` binds the overlay address
+and serves `in.threadnull.dev`, forwarding everything else to NextDNS
+(profile identified by an EDNS0 option, so no linked source IP is
+needed). The hub's own `/etc/resolv.conf` points at public resolvers and
+is made immutable with `chattr +i` — otherwise a dnsmasq failure would
+also break `apt`.
+
+The `dnsmasq` systemd drop-in is load-bearing and was debugged against a
+live failure: `After=` orders units, not kernel state, so dnsmasq could
+start in the same second the address was assigned, find nothing to bind
+with `bind-dynamic`, and listen nowhere — silently, with a normal-looking
+journal. The `ExecStartPre` loop waits for the address itself. `Wants=`
+is deliberately absent (it creates a stop-dependency cycle that keeps wg0
+from shutting down cleanly); `PartOf=` re-binds dnsmasq when wg0
+restarts without adding start ordering. See
+`roles/hub/templates/dnsmasq-wg-ordering.conf.j2`.
+
+**Metrics.** `prometheus-node-exporter` bound to `10.99.0.1:9100`, system
+metrics only. WireGuard peer state is read from `wg show` by a separate
+admin panel, not scraped.
+
+## Troubleshooting
+
+**A peer is unreachable**
+
+```bash
+sysctl net.ipv4.ip_forward              # 0 -> forwarded packets are dropped
+                                        #      before nftables sees them, while
+                                        #      SSH to the hub still works
+sudo wg show wg0 latest-handshakes      # no handshake -> keys/config on the
+                                        #      peer, or missing keepalive
+ip route show | grep wg0                # missing -> systemctl restart wg0-routes
+sudo nft list chain inet filter forward
+```
+
+**`*.in.threadnull.dev` does not resolve**
+
+```bash
+dig @10.99.0.1 <name>.in.threadnull.dev   # NXDOMAIN/timeout -> systemctl status dnsmasq
+ss -ulnp | grep :53                       # empty -> dnsmasq bound nothing (drop-in)
+```
+
+If `dig` against the hub works but the client fails, the client is not
+asking `10.99.0.1`. On MikroTik:
+`/ip dns static add type=FWD name="in.threadnull.dev" match-subdomain=yes forward-to=10.99.0.1`.
+
+**Logs**
+
+```bash
+journalctl -u wg-quick@wg0 -u wg0-routes -u nftables -u dnsmasq --since "1 hour ago"
+journalctl -k | grep "nft_forward_drop\|nft_input_drop"
+```
+
+## Reinstalling the hub
+
+`/etc/wireguard` is the source of truth for every peer's private key.
+Restore it and all routers and phones reconnect unchanged; lose it and
+every peer must be re-paired.
+
+```bash
+# While the hub is alive
+ssh hub.in.threadnull.dev 'sudo tar czf - /etc/wireguard' > hub-keys.tgz
+
+# After reinstalling the OS: create the ops account (above), then
+scp hub-keys.tgz ops@<public-ip>:/tmp/
+ssh ops@<public-ip> 'sudo tar xzf /tmp/hub-keys.tgz -C / && rm /tmp/hub-keys.tgz'
+
+# The host key changed and host_key_checking is on
+ssh-keygen -R <public-ip>; ssh-keygen -R 10.99.0.1
+
+ansible-playbook playbooks/hub.yml -e ansible_host=<public-ip> --ask-vault-pass
+```
+
+## Other directories
+
+`grafana/`, `logs-elk/`, `metrics-mikrotik/`, `prometheus/` and
+`routeros/` hold configuration for machines this repository does not
+provision — dashboards, alert rules, the ELK stack, exporter configs, and
+full MikroTik config exports kept for reference. They are excluded from
+`ansible-lint` and untouched by the playbook.

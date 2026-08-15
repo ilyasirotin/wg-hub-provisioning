@@ -1,9 +1,0 @@
-# Managed by Ansible. Input for wg-exit-sync:
-#   <bgp-nexthop> <wg-pubkey> <base-allowed-ips>
-# One line per exit-capable site (exit_priority in network.yml), sorted by
-# priority. base-allowed-ips is what the peer keeps when it is NOT the
-# elected exit; 0.0.0.0/0 is appended at runtime by wg-exit-sync.
-{% for e in sites | dict2items | selectattr('value.exit_priority', 'defined')
-                  | sort(attribute='value.exit_priority') %}
-{{ e.value.ip }} {{ wg_hub_peer_data[e.key]['pub'] }} {{ e.value.ip }}/32,10.{{ e.value.number }}.0.0/16
-{% endfor %}

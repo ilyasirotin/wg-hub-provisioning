@@ -1,0 +1,74 @@
+---
+# dnsmasq serves the internal zone on the overlay address and forwards
+# everything else upstream. The hub's own resolver is kept separate on
+# purpose: otherwise a dnsmasq failure would also break apt.
+- name: Disable systemd-resolved (frees port 53)
+  ansible.builtin.systemd_service:
+    name: systemd-resolved
+    state: stopped
+    enabled: false
+    masked: true
+  failed_when: false
+
+- name: Clear the immutable flag on resolv.conf
+  ansible.builtin.command: chattr -i /etc/resolv.conf
+  changed_when: false
+  failed_when: false
+
+- name: Check what /etc/resolv.conf currently is
+  ansible.builtin.stat:
+    path: /etc/resolv.conf
+    follow: false
+  register: hub_resolv_stat
+
+- name: Remove any resolv.conf symlink (e.g. the systemd-resolved stub)
+  ansible.builtin.file:
+    path: /etc/resolv.conf
+    state: absent
+  when: hub_resolv_stat.stat.islnk | default(false)
+
+- name: Pin the hub's own resolver to public servers
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    mode: "0644"
+    content: |
+      # Hub resolves independently of dnsmasq and the overlay.
+      {% for r in hub_resolvers %}
+      nameserver {{ r }}
+      {% endfor %}
+  register: hub_resolv
+
+# Stops dhclient and package scripts from rewriting the file.
+- name: Make resolv.conf immutable
+  ansible.builtin.command: chattr +i /etc/resolv.conf
+  changed_when: hub_resolv is changed
+  failed_when: false
+
+- name: Create the dnsmasq drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/dnsmasq.service.d
+    state: directory
+    mode: "0755"
+
+# Load-bearing: every line of the drop-in is explained in the template
+# itself. Do not simplify it.
+- name: Deploy the dnsmasq ordering drop-in
+  ansible.builtin.template:
+    src: dnsmasq-wg-ordering.conf.j2
+    dest: /etc/systemd/system/dnsmasq.service.d/wg-ordering.conf
+    mode: "0644"
+  notify: Restart dnsmasq
+
+- name: Deploy the internal zone config
+  ansible.builtin.template:
+    src: dnsmasq-internal.conf.j2
+    dest: /etc/dnsmasq.d/wg-internal.conf
+    mode: "0644"
+  notify: Restart dnsmasq
+
+- name: Enable and start dnsmasq
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    enabled: true
+    state: started
+    daemon_reload: true

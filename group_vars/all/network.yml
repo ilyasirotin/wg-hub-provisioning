@@ -1,174 +1,60 @@
 # =====================================================================
-# DECLARATIVE NETWORK MODEL
-# This is the only file you edit to add a device, a site, or a service.
-# Everything else (wg0.conf, nftables ACLs, routes, DNS zone, client
-# configs, MikroTik snippets) is generated from it.
+# NETWORK MODEL
+# This is the only file you edit to add, remove, or renumber a peer.
+# Every artefact is generated from it: the [Peer] blocks in wg0.conf,
+# the routes in wg0-routes.sh, the dnsmasq host-records, the client
+# .conf files, and the MikroTik .rsc snippets.
 #
 # ADDRESS PLAN
-#   Overlay (WireGuard):       10.99.0.0/24
-#     10.99.0.1                hub
-#     10.99.0.11 - 10.99.0.19  site routers  (site N -> 10.99.0.1N)
-#     10.99.0.20 - 10.99.0.99  personal clients
-#     10.99.0.100 - .199       service VPSes
-#   Site LANs:                 10.<site>.0.0/16
-#     VLAN k of site N         10.N.<k>.0/24
-#     e.g. 10.2.30.57 = site 2 (house B), VLAN 30 (IoT) - readable at
-#     a glance. 99 is reserved for the overlay and never a site number.
+#   Overlay (WireGuard)       10.99.0.0/24
+#     10.99.0.1               hub
+#     10.99.0.11 - .19        site routers
+#     10.99.0.20 - .99        personal devices
+#     10.99.0.100 - .199      service VPSes
+#   Site LANs                 10.<site>.0.0/16
+#     VLAN k of site N        10.N.<k>.0/24
+#   The ranges are an organisational convention for readability in
+#   `wg show`; they carry no policy. Every peer has identical,
+#   unrestricted access to the overlay. 99 is reserved for the overlay
+#   and is never a site number.
 # =====================================================================
 
 wg_domain: in.threadnull.dev
 wg_network: 10.99.0.0/24
 wg_port: 51820
 wg_interface: wg0
-wg_pbr_table: 123   # PBR table for profile:home egress (FRR + wg0-routes.sh)
 
-hub:
-  ip: 10.99.0.1
-  public_host: 65.21.177.182   # Endpoint in all generated client configs
+hub_overlay_ip: 10.99.0.1
+hub_public_endpoint: 134.122.63.146   # Endpoint in every generated client config
 
 # ---------------------------------------------------------------------
-# Sites: MikroTik routers with LANs behind them.
-#   exit_priority    -> int 1-999, unique. Present = the site can carry
-#                       internet egress of profile:home clients. Lower =
-#                       preferred. The site announces 0.0.0.0/0 via BGP;
-#                       the hub elects the best default (local-pref =
-#                       1000 - priority) and fails over automatically,
-#                       preempting back when the better site recovers.
-#                       No exit site available -> home clients fail closed.
-#   subnets          -> LAN subnets routed across the overlay.
-#   iot_subnets      -> subset of subnets; sources for group "iot" ACLs.
-# Adding a third house: copy a block, number = 3, router IP 10.99.0.13,
-# subnets 10.3.<vlan>.0/24. Run hub.yml, apply the generated .rsc snippet
-# from /etc/wireguard/clients/<site>.rsc on the new router.
-# ---------------------------------------------------------------------
-sites:
-  site_a:
-    description: "House A - primary exit"
-    number: 1
-    ip: 10.99.0.11
-    exit_priority: 100
-    subnets:
-      - 10.1.10.0/24    # vlan10 ethernet
-      - 10.1.20.0/24    # vlan20 wlan
-      - 10.1.30.0/24    # vlan30 iot
-      - 10.1.40.0/24    # vlan40 guest
-    iot_subnets:
-      - 10.1.30.0/24
-    dns_names: [router-a]
-
-  site_b:
-    description: "House B - remote (backup exit)"
-    number: 2
-    ip: 10.99.0.12
-    exit_priority: 200
-    subnets:
-      - 10.2.10.0/24    # vlan10 ethernet
-      - 10.2.20.0/24    # vlan20 wlan
-      - 10.2.30.0/24    # vlan30 iot
-      - 10.2.40.0/24    # vlan40 iptv
-      - 10.2.100.0/24   # vlan100 switch
-    iot_subnets:
-      - 10.2.30.0/24
-    dns_names: [router-b]
-
-# ---------------------------------------------------------------------
-# Personal devices. A .conf (QR-able) is generated for each.
-#   group: admin -> full access: overlay, all site LANs, all services.
-#   group: user  -> internet via chosen profile + only services that
-#                   list "users" in their ingress "from". No LAN access,
-#                   no router management. For family members.
-#   profile: cloud -> internet egress via the VPS (Hetzner IP)
-#   profile: home  -> internet egress via the best available exit site
-#                     (home IP; automatic BGP-driven failover, fail-closed
-#                     when no exit site is reachable)
-# ---------------------------------------------------------------------
-clients:
-  - name: pixel_10_pro_home
-    ip: 10.99.0.20
-    group: admin
-    profile: home          # internet egress via the exit-node home router
-
-  - name: pixel_10_pro_cloud
-    ip: 10.99.0.21
-    group: user
-    profile: cloud         # internet egress via the VPS (Hetzner IP)
-
-  - name: macbook_pro_home
-    ip: 10.99.0.22
-    group: admin
-    profile: home          # internet egress via the exit-node home router
-
-  - name: macbook_pro_cloud
-    ip: 10.99.0.23
-    group: user
-    profile: cloud         # internet egress via the VPS (Hetzner IP)
-
-  - name: thinkpad_home
-    ip: 10.99.0.24
-    group: admin
-    profile: home          # internet egress via the exit-node home router
-
-  - name: thinkpad_cloud
-    ip: 10.99.0.25
-    group: user
-    profile: cloud         # internet egress via the VPS (Hetzner IP)
-
-  # Example family member:
-  # - name: wife_phone
-  #   ip: 10.99.0.30
-  #   group: user
-  #   profile: home
-
-# ---------------------------------------------------------------------
-# Service VPSes. Example:
+# Peers.
+#   name          required. Also the key file name in /etc/wireguard/peers.
+#   address       required. Overlay address, no prefix.
+#   lan_supernet  optional. Presence means "this peer routes a LAN":
+#                 it adds the supernet to AllowedIPs, installs a route
+#                 via this peer, and generates a MikroTik .rsc snippet.
+#   dns_name      optional. Defaults to name with '_' replaced by '-'.
 #
-# services:
-#   - name: ha                          # peer name and key file name
-#     ip: 10.99.0.100
-#     dns_names: [ha]                   # -> ha.in.threadnull.dev
-#     nginx: true                       # local TLS termination
-#     nginx_upstream: 127.0.0.1:8123
-#     ingress:                          # who may connect, and where
-#       - { proto: tcp, port: 443,  from: [users, sites, iot] }
-#       - { proto: tcp, port: 8883, from: [iot] }       # MQTT over TLS
-#     egress:                           # flows the service may open itself
-#       - { to: iot_subnets }           # no port = all ports/protocols:
-#                                       #   vacuum control, printer camera,
-#                                       #   ESPHome API, etc.
-#
-#   - name: metrics
-#     ip: 10.99.0.101
-#     dns_names: [metrics, grpc]
-#     ingress:
-#       - { proto: tcp, port: 443, from: [sites] }      # gRPC agent
-#
-# "from" accepts: users, sites, iot, services, a site id (site_a),
-# or another service name. group:admin always has access implicitly.
-#
-# Workflow: edit here -> ansible-playbook playbooks/hub.yml
-#                     -> ansible-playbook playbooks/services.yml
+# Adding a peer: append a block, run playbooks/hub.yml, hand the
+# generated /etc/wireguard/peers/<name>.conf (or .rsc) to the device.
+# Existing sessions are not interrupted - see README.
 # ---------------------------------------------------------------------
-services:
-  - name: metrics
-    ip: 10.99.0.100
-    dns_names: [metrics]
-    nginx: true
-    nginx_upstream: 127.0.0.1:3000
-    ingress:
-      - { proto: tcp, port: 443, from: [sites] }
-      - { proto: tcp, port: 9090, from: [sites] }
-      - { proto: tcp, port: 5860, from: [sites] }
-    egress:
-      - { proto: tcp, port: 8728, to: sites }   # RouterOS API: mktxp scrapes site routers + extender
-      - { proto: udp, port: 161, to: sites }    # SNMP: snmp_exporter scrapes the CRS-326 switch (SwOS)
+peers:
+  - name: site_a
+    address: 10.99.0.11
+    lan_supernet: 10.1.0.0/16
+    dns_name: router-a
 
-  - name: logs
-    ip: 10.99.0.101
-    dns_names: [logs, kibana]
-    nginx: true
-    nginx_upstream: 127.0.0.1:5601              # Kibana (ELK stack, see logs-elk/)
-    ingress:
-      - { proto: udp, port: 514, from: [sites] }     # remote syslog: site_a/site_b routers + extender
-      - { proto: tcp, port: 9200, from: [services] }  # Elasticsearch API: Grafana(metrics) queries + Fluent Bit shippers
-      - { proto: tcp, port: 443, from: [admin] }     # Kibana UI (admins only; implicit hub accept opens the flow, member nft opens the port)
-      - { proto: tcp, port: 5860, from: [sites] }    # SSH management from site networks (as on the metrics service)
+  - name: site_b
+    address: 10.99.0.12
+    lan_supernet: 10.2.0.0/16
+    dns_name: router-b
+
+  # Example service VPS (no LAN behind it):
+  # - name: metrics
+  #   address: 10.99.0.100
+  #
+  # Example personal device:
+  # - name: pixel
+  #   address: 10.99.0.20

@@ -2,40 +2,15 @@ all:
   children:
     hub:
       hosts:
-        vps-relay-01:
+        hub-ams3:
+          # The overlay address. SSH stays on port 22; the DigitalOcean
+          # Cloud Firewall (managed in the DO panel, not here) is what
+          # closes it to the internet, so the control machine must be a
+          # connected overlay peer.
           ansible_host: 10.99.0.1
-          ansible_user: wg
-          ansible_port: 5860
-          # First run on a fresh server (no overlay yet, sshd still on 22):
+          ansible_user: ops
+          ansible_port: 22
+          # First run on a fresh droplet, before the overlay exists and
+          # before the Cloud Firewall is attached:
           #   ansible-playbook playbooks/hub.yml \
-          #     -e ansible_host=<hub-public-ip> -e ansible_port=22
-          # sshd moves to 5860 at the end of that run. See README
-          # "Reinstalling the hub" for the full fresh-install sequence.
-    # Service VPSes. On bootstrap ansible_host is the public IP from the
-    # Hetzner panel; once the host is inside the overlay, switch it to the
-    # wg address and set member_public_ssh: false.
-    services:
-      hosts:
-        metrics:
-          ansible_host: 10.99.0.100
-          ansible_user: ops
-          ansible_port: 5860
-          service_name: metrics
-          member_public_ssh: false
-
-        logs:
-          ansible_host: 10.99.0.101
-          ansible_user: ops
-          ansible_port: 5860
-          service_name: logs
-          member_public_ssh: false
-      #   general-node:
-      #     ansible_host: 10.99.0.100       # public IP during bootstrap; switch to overlay IP after
-      #     ansible_user: ha
-      #     ansible_port: 5860              # base_hardening switches to 5860 mid-play; no -e needed
-      #     service_name: ha                # entry name in network.yml
-      #     member_public_ssh: false        # SSH via public IP during bootstrap; switch to false after
-          # After bootstrap, update to:
-          #   ansible_host: 10.99.0.100  (overlay IP)
-          #   ansible_port: 5860
-          #   member_public_ssh: false   # SSH only via wg0; emergency access via Hetzner console
+          #     -e ansible_host=<droplet-public-ip> --ask-vault-pass

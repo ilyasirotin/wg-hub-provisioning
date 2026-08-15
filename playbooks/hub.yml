@@ -1,11 +1,8 @@
 ---
-# Hub = bare WireGuard relay (fresh Debian 12/13, user "wg" with sudo).
+# The whole hub: WireGuard overlay, static routes, nftables, internal
+# DNS, node_exporter. One role, one host.
 - name: Provision WireGuard hub
   hosts: hub
   become: true
   roles:
-    - base_hardening
-    - wg_hub
-    - frr_hub
-    - metrics_hub
-    - certs_hub
+    - hub
